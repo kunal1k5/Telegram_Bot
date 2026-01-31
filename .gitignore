@@ -5,6 +5,7 @@ __pycache__/
 *.pyd
 *.log
 *.session
+*.session-journal
 downloads/
 .env
 bot.text

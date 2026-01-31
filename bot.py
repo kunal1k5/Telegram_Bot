@@ -6,8 +6,7 @@ from typing import Final
 import telegram
 from telegram import Update
 from telegram.constants import ChatType, ParseMode
-from telegram.ext import (Application, ApplicationBuilder, CommandHandler,
-                          ContextTypes)
+from telegram.ext import Application, ApplicationBuilder, CommandHandler, ContextTypes
 
 from pyrogram import Client
 
@@ -28,23 +27,24 @@ logger = logging.getLogger("ANIMX_CLAN")
 BOT_NAME: Final[str] = "ANIMX CLAN"
 BOT_USERNAME: Final[str] = "@AnimxClanBot"
 
+START_TEXT: Final[str] = (
+    "🎶 ANIMX CLAN Music Bot 🎶\n"
+    "Add me to a group, start a voice chat, and use:\n"
+    "/play song_name_or_link"
+)
+
 
 # ========================= COMMAND HANDLERS ========================= #
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text = (
-        f"👋 Welcome to <b>{BOT_NAME}</b>!\n\n"
-        "I am a high-quality music bot for Telegram voice chats.\n\n"
-        "<b>Commands:</b>\n"
-        "/play &lt;song name or YouTube URL&gt; - Play music in voice chat\n"
-        "/pause - Pause playback\n"
-        "/resume - Resume playback\n"
-        "/skip - Skip current track\n"
-        "/stop - Stop and leave voice chat\n\n"
-        "Add me to a group, start a voice chat, and send /play!"
+    logger.info(
+        "/start received chat_id=%s type=%s user=%s",
+        update.effective_chat.id if update.effective_chat else None,
+        update.effective_chat.type if update.effective_chat else None,
+        update.effective_user.id if update.effective_user else None,
     )
 
-    await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
+    await update.effective_message.reply_text(START_TEXT)
 
 
 async def _ensure_group(update: Update) -> bool:
@@ -67,7 +67,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if not context.args:
         await message.reply_text(
-            "Usage: /play &lt;song name or YouTube URL&gt;",
+            "Usage: /play <song name or YouTube URL>",
             parse_mode=ParseMode.HTML,
         )
         return
@@ -172,11 +172,21 @@ async def stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_message.reply_text("🛑 Stopped and left voice chat.")
 
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.exception("Unhandled error: %s", context.error)
+
+
 # ========================= APP LIFECYCLE ========================= #
 
 
 async def on_startup(app: Application) -> None:
-    logger.info("Starting Pyrogram client and PyTgCalls...")
+    logger.info("Deleting webhook and starting clients...")
+
+    # Ensure no webhook conflicts exist
+    try:
+        await app.bot.delete_webhook(drop_pending_updates=True)
+    except Exception:
+        logger.exception("Failed to delete webhook")
 
     # Create a Pyrogram client using the same bot token
     pyro_client = Client(
@@ -185,6 +195,7 @@ async def on_startup(app: Application) -> None:
         api_hash=API_HASH,
         bot_token=BOT_TOKEN,
         workdir="./",
+        in_memory=True,
     )
 
     await pyro_client.start()
@@ -219,7 +230,7 @@ async def on_shutdown(app: Application) -> None:
     logger.info("Shutdown complete.")
 
 
-async def main() -> None:
+def main() -> None:
     application: Application = ApplicationBuilder().token(BOT_TOKEN).build()
 
     # Register lifecycle hooks
@@ -234,9 +245,17 @@ async def main() -> None:
     application.add_handler(CommandHandler("skip", skip))
     application.add_handler(CommandHandler("stop", stop_cmd))
 
+    # Error handler
+    application.add_error_handler(error_handler)
+
     logger.info("%s (%s) is starting...", BOT_NAME, BOT_USERNAME)
-    await application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+    application.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True,
+        close_loop=False,
+    )
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
