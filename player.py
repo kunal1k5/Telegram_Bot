@@ -5,10 +5,8 @@ from dataclasses import dataclass
 from typing import Dict, Optional
 
 from pyrogram import Client
-from pytgcalls import PyTgCalls
-from pytgcalls.types import AudioPiped
-from pytgcalls.types.input_stream.quality import HighQualityAudio
-from pytgcalls.types.stream import StreamAudioEnded
+from pytgcalls import GroupCallFactory
+from pytgcalls.implementation.group_call_file import GroupCallFile
 
 from config import DOWNLOAD_DIR
 
@@ -24,27 +22,20 @@ class Track:
 
 
 class MusicPlayer:
-    """Manages voice chat playback for multiple groups using PyTgCalls."""
+    """Manages voice chat playback for multiple groups using PyTgCalls 3.x."""
 
     def __init__(self, app: Client) -> None:
         self.app = app
-        self.call = PyTgCalls(self.app)
+        self.factory = GroupCallFactory(self.app)
 
-        # Per-chat queues and state
+        # Per-chat queues, state, and group call objects
         self.queues: Dict[int, asyncio.Queue[Track]] = {}
         self.current: Dict[int, Optional[Track]] = {}
         self.locks: Dict[int, asyncio.Lock] = {}
-
-        # Register event handlers
-        @self.call.on_stream_end()
-        async def _on_stream_end(_, update: StreamAudioEnded) -> None:  # type: ignore[no-redef]
-            chat_id = update.chat_id
-            logger.info("Stream ended in chat %s", chat_id)
-            await self._play_next(chat_id)
+        self.calls: Dict[int, GroupCallFile] = {}
 
     async def start(self) -> None:
-        logger.info("Starting PyTgCalls client...")
-        await self.call.start()
+        logger.info("Music player ready.")
 
     async def shutdown(self) -> None:
         """Best-effort cleanup of all active calls and temp files."""
@@ -55,15 +46,23 @@ class MusicPlayer:
             except Exception:
                 continue
 
-        try:
-            await self.call.stop()
-        except Exception:
-            pass
-
     def _get_queue(self, chat_id: int) -> asyncio.Queue[Track]:
         if chat_id not in self.queues:
             self.queues[chat_id] = asyncio.Queue()
         return self.queues[chat_id]
+
+    def _get_call(self, chat_id: int) -> GroupCallFile:
+        if chat_id not in self.calls:
+            group_call = self.factory.get_file_group_call(play_on_repeat=False)
+
+            @group_call.on_playout_ended
+            async def _on_playout_ended(_, __):  # type: ignore[no-redef]
+                logger.info("Playout ended in chat %s", chat_id)
+                await self._play_next(chat_id)
+
+            self.calls[chat_id] = group_call
+
+        return self.calls[chat_id]
 
     def _get_lock(self, chat_id: int) -> asyncio.Lock:
         if chat_id not in self.locks:
@@ -86,19 +85,17 @@ class MusicPlayer:
             size,
         )
 
-        # If nothing is currently playing, start immediately
         if not self.current.get(track.chat_id):
             asyncio.create_task(self._play_next(track.chat_id))
             return 1
 
-        return size + 1  # existing current track + items ahead
+        return size + 1
 
     async def _play_next(self, chat_id: int) -> None:
         lock = self._get_lock(chat_id)
         async with lock:
             queue = self._get_queue(chat_id)
 
-            # Clean up previous track file
             previous = self.current.get(chat_id)
             if previous and os.path.exists(previous.file_path):
                 try:
@@ -109,9 +106,9 @@ class MusicPlayer:
 
             if queue.empty():
                 self.current[chat_id] = None
-                # Leave voice chat when queue is empty
                 try:
-                    await self.call.leave_group_call(chat_id)
+                    group_call = self._get_call(chat_id)
+                    await group_call.stop()
                     logger.info("Left voice chat for chat %s (queue empty)", chat_id)
                 except Exception as e:  # noqa: BLE001
                     logger.debug("Error leaving voice chat for chat %s: %s", chat_id, e)
@@ -122,23 +119,22 @@ class MusicPlayer:
 
             logger.info("Starting playback in chat=%s title=%s", chat_id, track.title)
 
-            audio = AudioPiped(track.file_path, HighQualityAudio())
+            group_call = self._get_call(chat_id)
+            group_call.input_filename = track.file_path
 
             try:
-                await self.call.join_group_call(chat_id, audio)
-            except Exception as e:  # noqa: BLE001
-                # If already in a call, just change stream
-                logger.debug("join_group_call failed in chat %s: %s", chat_id, e)
-                try:
-                    await self.call.change_stream(chat_id, audio)
-                except Exception as err:  # noqa: BLE001
-                    logger.error("Failed to start stream in chat %s: %s", chat_id, err)
-                    # Skip to next track if this one fails
-                    await self._play_next(chat_id)
+                if group_call.is_connected:
+                    group_call.restart_playout()
+                else:
+                    await group_call.start(chat_id)
+            except Exception as err:  # noqa: BLE001
+                logger.error("Failed to start stream in chat %s: %s", chat_id, err)
+                await self._play_next(chat_id)
 
     async def pause(self, chat_id: int) -> bool:
         try:
-            await self.call.pause_stream(chat_id)
+            group_call = self._get_call(chat_id)
+            group_call.pause_playout()
             return True
         except Exception as e:  # noqa: BLE001
             logger.warning("Pause failed in chat %s: %s", chat_id, e)
@@ -146,21 +142,21 @@ class MusicPlayer:
 
     async def resume(self, chat_id: int) -> bool:
         try:
-            await self.call.resume_stream(chat_id)
+            group_call = self._get_call(chat_id)
+            group_call.resume_playout()
             return True
         except Exception as e:  # noqa: BLE001
             logger.warning("Resume failed in chat %s: %s", chat_id, e)
             return False
 
     async def skip(self, chat_id: int) -> bool:
-        """Skip current track and play next in queue."""
-
         queue = self._get_queue(chat_id)
         if queue.empty() and not self.current.get(chat_id):
             return False
 
         try:
-            await self.call.leave_group_call(chat_id)
+            group_call = self._get_call(chat_id)
+            await group_call.stop()
         except Exception as e:  # noqa: BLE001
             logger.debug("leave_group_call during skip failed for chat %s: %s", chat_id, e)
 
@@ -168,11 +164,8 @@ class MusicPlayer:
         return True
 
     async def stop(self, chat_id: int) -> None:
-        """Stop playback, clear queue, leave call, and cleanup files."""
-
         queue = self._get_queue(chat_id)
 
-        # Drain queue and remove files
         while not queue.empty():
             track = await queue.get()
             if os.path.exists(track.file_path):
@@ -183,7 +176,6 @@ class MusicPlayer:
 
         self.queues[chat_id] = asyncio.Queue()
 
-        # Remove current track file
         current = self.current.get(chat_id)
         if current and os.path.exists(current.file_path):
             try:
@@ -194,11 +186,11 @@ class MusicPlayer:
         self.current[chat_id] = None
 
         try:
-            await self.call.leave_group_call(chat_id)
+            group_call = self._get_call(chat_id)
+            await group_call.stop()
         except Exception as e:  # noqa: BLE001
             logger.debug("Error leaving group call for chat %s: %s", chat_id, e)
 
-        # Best-effort: clean orphaned files in DOWNLOAD_DIR
         for root, _, files in os.walk(DOWNLOAD_DIR):
             for name in files:
                 path = os.path.join(root, name)
