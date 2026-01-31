@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from html import escape
 from typing import Final
 
 import telegram
@@ -66,10 +67,7 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     assert chat is not None
 
     if not context.args:
-        await message.reply_text(
-            "Usage: /play <song name or YouTube URL>",
-            parse_mode=ParseMode.HTML,
-        )
+        await message.reply_text("Usage: /play song_name_or_link")
         return
 
     query = " ".join(context.args).strip()
@@ -92,15 +90,16 @@ async def play(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     requested_by = update.effective_user.mention_html() if update.effective_user else "Unknown"
+    safe_title = escape(title)
     track = Track(chat_id=chat.id, file_path=file_path, title=title, requested_by=requested_by)
 
     position = await player.add_to_queue(track)
 
     if position == 1 and not player.current.get(chat.id):
-        text = f"▶️ Now playing: <b>{title}</b>\nRequested by: {requested_by}"
+        text = f"▶️ Now playing: <b>{safe_title}</b>\nRequested by: {requested_by}"
     else:
         text = (
-            f"✅ Added to queue: <b>{title}</b> (position {position})\n"
+            f"✅ Added to queue: <b>{safe_title}</b> (position {position})\n"
             f"Requested by: {requested_by}"
         )
 

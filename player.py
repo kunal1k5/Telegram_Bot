@@ -5,8 +5,10 @@ from dataclasses import dataclass
 from typing import Dict, Optional
 
 from pyrogram import Client
-from pytgcalls import GroupCallFactory
-from pytgcalls.implementation.group_call_file import GroupCallFile
+from pytgcalls import PyTgCalls
+from pytgcalls.types import AudioPiped
+from pytgcalls.types.input_stream.quality import HighQualityAudio
+from pytgcalls.types.stream import StreamAudioEnded
 
 from config import DOWNLOAD_DIR
 
@@ -26,45 +28,42 @@ class MusicPlayer:
 
     def __init__(self, app: Client) -> None:
         self.app = app
-        self.factory = GroupCallFactory(self.app)
+        self.call = PyTgCalls(self.app)
 
-        # Per-chat queues, state, and group call objects
+        # Per-chat queues and state
         self.queues: Dict[int, asyncio.Queue[Track]] = {}
         self.current: Dict[int, Optional[Track]] = {}
         self.locks: Dict[int, asyncio.Lock] = {}
-        self.calls: Dict[int, GroupCallFile] = {}
+
+        # Register event handlers
+        @self.call.on_stream_end()
+        async def _on_stream_end(_, update: StreamAudioEnded) -> None:  # type: ignore[no-redef]
+            chat_id = update.chat_id
+            logger.info("Stream ended in chat %s", chat_id)
+            await self._play_next(chat_id)
 
     async def start(self) -> None:
-        # No-op for this pytgcalls backend; per-chat calls are created on demand.
-        logger.info("Music player ready.")
+        logger.info("Starting PyTgCalls client...")
+        await self.call.start()
 
     async def shutdown(self) -> None:
         """Best-effort cleanup of all active calls and temp files."""
 
-        # Stop playback and clear queues for all chats
         for chat_id in list(self.queues.keys()):
             try:
                 await self.stop(chat_id)
             except Exception:
                 continue
 
+        try:
+            await self.call.stop()
+        except Exception:
+            pass
+
     def _get_queue(self, chat_id: int) -> asyncio.Queue[Track]:
         if chat_id not in self.queues:
             self.queues[chat_id] = asyncio.Queue()
         return self.queues[chat_id]
-
-    def _get_call(self, chat_id: int) -> GroupCallFile:
-        if chat_id not in self.calls:
-            group_call = self.factory.get_file_group_call(play_on_repeat=False)
-
-            @group_call.on_playout_ended
-            async def _on_playout_ended(_, __):  # type: ignore[no-redef]
-                logger.info("Playout ended in chat %s", chat_id)
-                await self._play_next(chat_id)
-
-            self.calls[chat_id] = group_call
-
-        return self.calls[chat_id]
 
     def _get_lock(self, chat_id: int) -> asyncio.Lock:
         if chat_id not in self.locks:
@@ -112,8 +111,7 @@ class MusicPlayer:
                 self.current[chat_id] = None
                 # Leave voice chat when queue is empty
                 try:
-                    group_call = self._get_call(chat_id)
-                    await group_call.stop()
+                    await self.call.leave_group_call(chat_id)
                     logger.info("Left voice chat for chat %s (queue empty)", chat_id)
                 except Exception as e:  # noqa: BLE001
                     logger.debug("Error leaving voice chat for chat %s: %s", chat_id, e)
@@ -124,23 +122,23 @@ class MusicPlayer:
 
             logger.info("Starting playback in chat=%s title=%s", chat_id, track.title)
 
-            group_call = self._get_call(chat_id)
-            group_call.input_filename = track.file_path
+            audio = AudioPiped(track.file_path, HighQualityAudio())
 
             try:
-                if group_call.is_connected:
-                    group_call.restart_playout()
-                else:
-                    await group_call.start(chat_id)
-            except Exception as err:  # noqa: BLE001
-                logger.error("Failed to start stream in chat %s: %s", chat_id, err)
-                # Skip to next track if this one fails
-                await self._play_next(chat_id)
+                await self.call.join_group_call(chat_id, audio)
+            except Exception as e:  # noqa: BLE001
+                # If already in a call, just change stream
+                logger.debug("join_group_call failed in chat %s: %s", chat_id, e)
+                try:
+                    await self.call.change_stream(chat_id, audio)
+                except Exception as err:  # noqa: BLE001
+                    logger.error("Failed to start stream in chat %s: %s", chat_id, err)
+                    # Skip to next track if this one fails
+                    await self._play_next(chat_id)
 
     async def pause(self, chat_id: int) -> bool:
         try:
-            group_call = self._get_call(chat_id)
-            group_call.pause_playout()
+            await self.call.pause_stream(chat_id)
             return True
         except Exception as e:  # noqa: BLE001
             logger.warning("Pause failed in chat %s: %s", chat_id, e)
@@ -148,8 +146,7 @@ class MusicPlayer:
 
     async def resume(self, chat_id: int) -> bool:
         try:
-            group_call = self._get_call(chat_id)
-            group_call.resume_playout()
+            await self.call.resume_stream(chat_id)
             return True
         except Exception as e:  # noqa: BLE001
             logger.warning("Resume failed in chat %s: %s", chat_id, e)
@@ -163,8 +160,7 @@ class MusicPlayer:
             return False
 
         try:
-            group_call = self._get_call(chat_id)
-            await group_call.stop()
+            await self.call.leave_group_call(chat_id)
         except Exception as e:  # noqa: BLE001
             logger.debug("leave_group_call during skip failed for chat %s: %s", chat_id, e)
 
@@ -198,8 +194,7 @@ class MusicPlayer:
         self.current[chat_id] = None
 
         try:
-            group_call = self._get_call(chat_id)
-            await group_call.stop()
+            await self.call.leave_group_call(chat_id)
         except Exception as e:  # noqa: BLE001
             logger.debug("Error leaving group call for chat %s: %s", chat_id, e)
 
