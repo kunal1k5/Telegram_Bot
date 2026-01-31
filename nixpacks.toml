@@ -1,5 +1,22 @@
 [phases.setup]
-aptPkgs = ["ffmpeg", "libxcb1", "libx11-6", "libxext6", "libxrender1", "libgl1", "libglib2.0-0"]
+aptPkgs = [
+	"ffmpeg",
+	"libxcb1",
+	"libx11-6",
+	"libxext6",
+	"libxrender1",
+	"libgl1",
+	"libglib2.0-0",
+	"libsm6",
+	"libxcomposite1",
+	"libxdamage1",
+	"libxfixes3",
+	"libxkbcommon0",
+	"libxrandr2",
+	"libxcb-shm0",
+	"libxcb-render0",
+	"libxcb-xinerama0"
+]
 
 [phases.install]
 cmds = ["pip install --upgrade pip", "pip install -r requirements.txt"]
