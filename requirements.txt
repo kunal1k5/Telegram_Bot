@@ -1,5 +1,6 @@
 python-telegram-bot==21.4
 pyrogram==2.0.106
 pytgcalls==3.0.0.dev24
+opencv-python-headless==4.10.0.84
 yt-dlp
 tgcrypto
