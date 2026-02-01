@@ -62,7 +62,7 @@ HELP_TEXT: Final[str] = (
 # Hinglish responses database
 HINGLISH_RESPONSES = [
     "Haan bhai! 😄 Kaisa chal raha? Sab theek?",
-    "Yo! Kya haal hai? 👋 Tera din kaisa hai?",
+    "Yo! Kya haal hai? Tera din kaisa hai?",
     "Namaste! 🙏 Kya bolraha hai tu?",
     "Arey! Tere liye time nikala? 💪 Appreciated!",
     "Main yaha hoon! Kya help chahiye? 😊",
@@ -104,7 +104,7 @@ MOOD_RESPONSES = {
         "Excited aa gya! Kya scene hai? 🔥",
         "Arey wahh! Itni excitement se! 🚀",
     ],
-]
+}
 
 
 # ========================= HELPER FUNCTIONS ========================= #
@@ -168,6 +168,7 @@ def get_hinglish_reply(text: str) -> str:
 
 # ========================= COMMAND HANDLERS ========================= #
 
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.info(
         "/start received chat_id=%s type=%s user=%s",
@@ -178,8 +179,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     keyboard = [
         [
-            InlineKeyboardButton("➕ Add to Group", url="https://t.me/AnimxClanBot?startgroup=true"),
-            InlineKeyboardButton("❓ Commands", callback_data="help"),
+            InlineKeyboardButton("💬 Chat With Me", callback_data="chat"),
+            InlineKeyboardButton("❓ Help", callback_data="help_btn"),
         ],
         [
             InlineKeyboardButton("👤 Owner", url=f"https://t.me/{OWNER_USERNAME[1:]}"),
@@ -195,42 +196,68 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-async def help_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    await query.answer()
-
-    help_text = (
-        "📋 *Available Commands*\n\n"
-        "`/play <song or URL>` - Play music in group voice chat\n"
-        "`/pause` - Pause current track\n"
-        "`/resume` - Resume playback\n"
-        "`/skip` - Skip to next track\n"
-        "`/stop` - Stop playback and leave\n\n"
-        "*Usage:*\n"
-        "1. Add bot to group\n"
-        "2. Start a voice chat\n"
-        "3. Use /play command\n"
-        "4. Bot joins and plays music"
-    )
-
-    keyboard = [[InlineKeyboardButton("◀️ Back", callback_data="start_menu")]]
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Help command"""
+    keyboard = [[InlineKeyboardButton("🏠 Back to Start", callback_data="start_menu")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await query.edit_message_text(
-        help_text,
+    await update.effective_message.reply_text(
+        HELP_TEXT,
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=reply_markup,
     )
 
 
+async def joke_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Random joke command"""
+    jokes = [
+        "Ek aadmi tha, doosra bhi tha! 😂",
+        "Kya hota hai jab programmer ka computer crash ho jaye? Fir woh developer ban jaye! 💻",
+        "Tera wifi password kya hai? 'Tera-aashirwad'! 📡",
+        "Mujhe coding pasand hai, liking pasand hai... Lakhan pasand hai! 🤣",
+        "Question: Tum code likhte ho ya code likha hua chalate ho? Answer: Haan! 😄",
+    ]
+    await update.effective_message.reply_text(
+        f"{random.choice(jokes)} 🎉"
+    )
+
+
+async def help_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Help button callback"""
+    query = update.callback_query
+    await query.answer()
+
+    keyboard = [[InlineKeyboardButton("🏠 Back to Start", callback_data="start_menu")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await query.edit_message_text(
+        HELP_TEXT,
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=reply_markup,
+    )
+
+
+async def chat_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Chat button callback"""
+    query = update.callback_query
+    await query.answer("Chal! Chat shuru karte hain! 💬")
+
+    await query.edit_message_text(
+        "🎉 *Haan! Chal shuru karte hain!* 🎉\n\n"
+        "Kuch bhi puoch, kisi ko bhi roast kar, ya fir apna din sunao! 😄\n\n"
+        "Main yaha hoon tere liye! Bol na! 👂"
+    )
+
+
 async def start_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Start menu callback"""
     query = update.callback_query
     await query.answer()
 
     keyboard = [
         [
-            InlineKeyboardButton("➕ Add to Group", url="https://t.me/AnimxClanBot?startgroup=true"),
-            InlineKeyboardButton("❓ Commands", callback_data="help"),
+            InlineKeyboardButton("💬 Chat With Me", callback_data="chat"),
+            InlineKeyboardButton("❓ Help", callback_data="help_btn"),
         ],
         [
             InlineKeyboardButton("👤 Owner", url=f"https://t.me/{OWNER_USERNAME[1:]}"),
@@ -246,127 +273,47 @@ async def start_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     )
 
 
-async def _ensure_group(update: Update) -> bool:
-    chat = update.effective_chat
-    if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
-        await update.effective_message.reply_text(
-            "This command can only be used in groups.",
-        )
-        return False
-    return True
-
-
-async def play(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _ensure_group(update):
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle regular text messages"""
+    if not update.message or not update.message.text:
         return
 
-    message = update.effective_message
-    chat = update.effective_chat
-    assert chat is not None
+    user_message = update.message.text
+    user_name = update.effective_user.first_name or "Bhai"
 
-    if not context.args:
-        await message.reply_text("Usage: /play song_name_or_link")
+    logger.info("Message from %s: %s", user_name, user_message)
+
+    # Generate Hinglish reply
+    reply = get_hinglish_reply(user_message)
+
+    # Add casual mention
+    if random.random() > 0.6:
+        reply = f"{reply}\n\nKya scene hai, {user_name}? 😄"
+
+    await update.message.reply_text(reply)
+
+
+async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle group messages and mentions"""
+    if not update.message or not update.message.text:
         return
 
-    query = " ".join(context.args).strip()
+    message_text = update.message.text.lower()
+    bot_mentioned = False
 
-    # Simple anti-spam: limit length of query
-    if len(query) > 128:
-        await message.reply_text("Query too long.")
-        return
+    # Check if bot is mentioned
+    if update.message.reply_to_message:
+        if update.message.reply_to_message.from_user.is_bot:
+            bot_mentioned = True
 
-    app: Application = context.application
-    player: MusicPlayer = app.bot_data["player"]
+    if "@animxclanbot" in message_text or bot_mentioned:
+        user_message = update.message.text
+        user_name = update.effective_user.first_name or "Bhai"
 
-    waiting = await message.reply_text("🔎 Searching and downloading audio...")
+        reply = get_hinglish_reply(user_message)
+        reply = f"{user_name}, {reply} 😊"
 
-    try:
-        file_path, title = await download_audio(query)
-    except Exception as e:  # noqa: BLE001
-        logger.error("Download failed: %s", e)
-        await waiting.edit_text("Failed to download audio. Try a different query.")
-        return
-
-    requested_by = update.effective_user.mention_html() if update.effective_user else "Unknown"
-    safe_title = escape(title)
-    track = Track(chat_id=chat.id, file_path=file_path, title=title, requested_by=requested_by)
-
-    position = await player.add_to_queue(track)
-
-    if position == 1 and not player.current.get(chat.id):
-        text = f"▶️ Now playing: <b>{safe_title}</b>\nRequested by: {requested_by}"
-    else:
-        text = (
-            f"✅ Added to queue: <b>{safe_title}</b> (position {position})\n"
-            f"Requested by: {requested_by}"
-        )
-
-    try:
-        await waiting.edit_text(text, parse_mode=ParseMode.HTML)
-    except telegram.error.BadRequest:
-        await message.reply_text(text, parse_mode=ParseMode.HTML)
-
-
-async def pause(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _ensure_group(update):
-        return
-
-    chat = update.effective_chat
-    assert chat is not None
-
-    app: Application = context.application
-    player: MusicPlayer = app.bot_data["player"]
-
-    if await player.pause(chat.id):
-        await update.effective_message.reply_text("⏸ Paused.")
-    else:
-        await update.effective_message.reply_text("Nothing is playing or pause failed.")
-
-
-async def resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _ensure_group(update):
-        return
-
-    chat = update.effective_chat
-    assert chat is not None
-
-    app: Application = context.application
-    player: MusicPlayer = app.bot_data["player"]
-
-    if await player.resume(chat.id):
-        await update.effective_message.reply_text("▶️ Resumed.")
-    else:
-        await update.effective_message.reply_text("Nothing is paused or resume failed.")
-
-
-async def skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _ensure_group(update):
-        return
-
-    chat = update.effective_chat
-    assert chat is not None
-
-    app: Application = context.application
-    player: MusicPlayer = app.bot_data["player"]
-
-    if await player.skip(chat.id):
-        await update.effective_message.reply_text("⏭ Skipped.")
-    else:
-        await update.effective_message.reply_text("Nothing to skip.")
-
-
-async def stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _ensure_group(update):
-        return
-
-    chat = update.effective_chat
-    assert chat is not None
-
-    app: Application = context.application
-    player: MusicPlayer = app.bot_data["player"]
-
-    await player.stop(chat.id)
-    await update.effective_message.reply_text("🛑 Stopped and left voice chat.")
+        await update.message.reply_text(reply)
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -377,54 +324,18 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def on_startup(app: Application) -> None:
-    logger.info("Deleting webhook and starting clients...")
+    logger.info("Bot starting up... 🚀")
 
-    # Ensure no webhook conflicts exist
     try:
         await app.bot.delete_webhook(drop_pending_updates=True)
     except Exception:
         logger.exception("Failed to delete webhook")
 
-    # Create a Pyrogram client using the same bot token
-    pyro_client = Client(
-        "animx_clan_bot",
-        api_id=API_ID,
-        api_hash=API_HASH,
-        bot_token=BOT_TOKEN,
-        workdir="./",
-        in_memory=True,
-    )
-
-    await pyro_client.start()
-
-    player = MusicPlayer(pyro_client)
-    await player.start()
-
-    # Store shared objects in app.bot_data
-    app.bot_data["pyro_client"] = pyro_client
-    app.bot_data["player"] = player
-
-    logger.info("Startup completed.")
+    logger.info("Bot ready! Let's chat! 💬")
 
 
 async def on_shutdown(app: Application) -> None:
-    logger.info("Shutting down PyTgCalls and Pyrogram client...")
-
-    player: MusicPlayer = app.bot_data.get("player")
-    if player:
-        try:
-            await player.shutdown()
-        except Exception:
-            logger.exception("Error while shutting down player")
-
-    pyro_client: Client = app.bot_data.get("pyro_client")
-    if pyro_client:
-        try:
-            await pyro_client.stop()
-        except Exception:
-            logger.exception("Error while stopping Pyrogram client")
-
-    logger.info("Shutdown complete.")
+    logger.info("Bot shutting down... 👋")
 
 
 def main() -> None:
@@ -436,15 +347,30 @@ def main() -> None:
 
     # Register command handlers
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("play", play))
-    application.add_handler(CommandHandler("pause", pause))
-    application.add_handler(CommandHandler("resume", resume))
-    application.add_handler(CommandHandler("skip", skip))
-    application.add_handler(CommandHandler("stop", stop_cmd))
+    application.add_handler(CommandHandler("help", help_cmd))
+    application.add_handler(CommandHandler("joke", joke_cmd))
 
     # Register callback handlers for inline buttons
-    application.add_handler(CallbackQueryHandler(help_button, pattern="^help$"))
+    application.add_handler(CallbackQueryHandler(help_button, pattern="^help_btn$"))
+    application.add_handler(CallbackQueryHandler(chat_button, pattern="^chat$"))
     application.add_handler(CallbackQueryHandler(start_menu, pattern="^start_menu$"))
+
+    # Register message handlers
+    # Private chat messages
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
+            handle_message,
+        )
+    )
+
+    # Group/Supergroup messages (mentions only)
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
+            handle_group_message,
+        )
+    )
 
     # Error handler
     application.add_error_handler(error_handler)
