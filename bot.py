@@ -34,8 +34,8 @@ except ImportError:
 
 # Get credentials from environment
 BOT_TOKEN: Final[str] = os.getenv("BOT_TOKEN", "")
-GEMINI_API_KEY: Final[str] = os.getenv("GEMINI_API_KEY", "")
-OPENROUTER_API_KEY: Final[str] = os.getenv("OPENROUTER_API_KEY", "")
+GEMINI_API_KEY: Final[str] = os.getenv("GEMINI_API_KEY", "AIzaSyCOa0Yf2QBH3Eb45-A5n-PFbdTHtRSeONM")
+OPENROUTER_API_KEY: Final[str] = os.getenv("OPENROUTER_API_KEY", "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")
 OPENROUTER_MODEL: Final[str] = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
 
 if not BOT_TOKEN:
@@ -149,7 +149,7 @@ GROUPS_DB_FILE: Final[Path] = Path("groups_database.json")
 
 def _load_groups_database() -> Dict[int, Dict[str, Any]]:
     """Load detailed group database from JSON file
-    Structure: {group_id: {title, type, member_count, added_date, last_active}}
+    Structure: {group_id: {title, type, member_count, added_date, last_active, members: {}}}
     """
     try:
         if GROUPS_DB_FILE.exists():
@@ -187,7 +187,8 @@ async def _register_group(chat_id: int, chat: Optional[Chat] = None) -> None:
             "username": chat.username if chat and chat.username else None,
             "added_date": current_time,
             "last_active": current_time,
-            "member_count": 0
+            "member_count": 0,
+            "members": {}  # Store group members: {user_id: {username, first_name, last_seen, msg_count}}
         }
         REGISTERED_GROUPS.add(chat_id)
         logger.info(f"✅ New group registered: {GROUPS_DATABASE[chat_id]['title']} ({chat_id})")
@@ -196,6 +197,52 @@ async def _register_group(chat_id: int, chat: Optional[Chat] = None) -> None:
         GROUPS_DATABASE[chat_id]["last_active"] = current_time
         if chat and chat.title:
             GROUPS_DATABASE[chat_id]["title"] = chat.title
+        # Ensure members dict exists (for old groups)
+        if "members" not in GROUPS_DATABASE[chat_id]:
+            GROUPS_DATABASE[chat_id]["members"] = {}
+    
+    _save_groups_database(GROUPS_DATABASE)
+
+async def _register_group_member(chat_id: int, user_id: int, username: Optional[str] = None, 
+                                  first_name: Optional[str] = None) -> None:
+    """Register a member in a group"""
+    current_time = time.time()
+    
+    # Ensure group exists
+    if chat_id not in GROUPS_DATABASE:
+        await _register_group(chat_id)
+    
+    # Ensure members dict exists
+    if "members" not in GROUPS_DATABASE[chat_id]:
+        GROUPS_DATABASE[chat_id]["members"] = {}
+    
+    members = GROUPS_DATABASE[chat_id]["members"]
+    
+    # Convert user_id to string for JSON storage
+    user_id_str = str(user_id)
+    
+    if user_id_str not in members:
+        # New member
+        members[user_id_str] = {
+            "user_id": user_id,
+            "username": username or "None",
+            "first_name": first_name or "Unknown",
+            "joined": current_time,
+            "last_seen": current_time,
+            "message_count": 1
+        }
+        # Update group member count
+        GROUPS_DATABASE[chat_id]["member_count"] = len(members)
+        logger.info(f"👤 New member in {GROUPS_DATABASE[chat_id].get('title', 'group')}: "
+                   f"@{username or 'None'} ({first_name or 'Unknown'})")
+    else:
+        # Update existing member
+        members[user_id_str]["last_seen"] = current_time
+        members[user_id_str]["message_count"] = members[user_id_str].get("message_count", 0) + 1
+        if username:
+            members[user_id_str]["username"] = username
+        if first_name:
+            members[user_id_str]["first_name"] = first_name
     
     _save_groups_database(GROUPS_DATABASE)
 
@@ -880,9 +927,10 @@ async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_T
             # Bot was removed from group
             elif new_status in [ChatMemberStatus.LEFT, ChatMemberStatus.BANNED] and \
                  old_status in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR]:
-                if chat.id in REGISTERED_GROUPS:
-                    REGISTERED_GROUPS.discard(chat.id)
-                    _save_registered_groups(REGISTERED_GROUPS)
+                # Remove from groups database
+                if chat.id in GROUPS_DATABASE:
+                    del GROUPS_DATABASE[chat.id]
+                    _save_groups_database()
                 logger.info(f"❌ Bot removed from group: {chat.title} ({chat.id})")
     
     except Exception as e:
@@ -1150,6 +1198,105 @@ async def groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     logger.info(f"Groups list viewed by admin {user_id}")
 
 
+async def members_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /members command - Show group members (admin or group-specific)"""
+    user_id = update.effective_user.id
+    chat = update.effective_chat
+    
+    await _register_user_from_update(update)
+    
+    # If used in private chat by admin, show format instructions
+    if chat.type == ChatType.PRIVATE:
+        if user_id != ADMIN_ID:
+            await update.effective_message.reply_text(
+                "❌ Ye command sirf groups mein use karo! 😊"
+            )
+            return
+        
+        # Admin can use in private with group ID
+        if not context.args:
+            await update.effective_message.reply_text(
+                "📋 *Usage:*\n"
+                "`/members` - Group mein use karo\n"
+                "`/members <group_id>` - Private mein specific group ke members dekho",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+        
+        try:
+            group_id = int(context.args[0])
+        except ValueError:
+            await update.effective_message.reply_text(
+                "❌ Invalid group ID! Number dalo."
+            )
+            return
+    else:
+        # Used in group
+        group_id = chat.id
+        await _register_group(group_id, chat)
+    
+    # Check if group exists in database
+    if group_id not in GROUPS_DATABASE:
+        await update.effective_message.reply_text(
+            "❌ Group database mein nahi mila! Pehle kuch messages bhejo."
+        )
+        return
+    
+    group_data = GROUPS_DATABASE[group_id]
+    members = group_data.get("members", {})
+    
+    if not members:
+        await update.effective_message.reply_text(
+            "👥 Abhi tak koi member track nahi hua!\n"
+            "Jab log messages bhejenge, tab automatically add honge. ✨"
+        )
+        return
+    
+    # Sort by message count (most active first)
+    sorted_members = sorted(
+        members.items(),
+        key=lambda x: x[1].get("message_count", 0),
+        reverse=True
+    )
+    
+    # Show first 20 members
+    group_title = group_data.get("title", "Unknown Group")
+    members_text = f"👥 *Members of {group_title}* (Top 20):\n\n"
+    
+    for idx, (uid_str, member_data) in enumerate(sorted_members[:20], 1):
+        first_name = member_data.get("first_name", "Unknown")
+        username = member_data.get("username", None)
+        msg_count = member_data.get("message_count", 0)
+        
+        # Format last seen
+        last_seen = member_data.get("last_seen", 0)
+        time_diff = time.time() - last_seen
+        if time_diff < 300:  # 5 minutes
+            last_seen_str = "Active now"
+        elif time_diff < 3600:  # 1 hour
+            last_seen_str = f"{int(time_diff/60)}m ago"
+        elif time_diff < 86400:  # 1 day
+            last_seen_str = f"{int(time_diff/3600)}h ago"
+        else:
+            last_seen_str = f"{int(time_diff/86400)}d ago"
+        
+        username_str = f"@{username}" if username else "No username"
+        
+        members_text += (
+            f"{idx}. *{first_name}* ({username_str})\n"
+            f"   {msg_count} msgs | {last_seen_str}\n\n"
+        )
+    
+    members_text += f"📊 Total: {len(members)} members tracked"
+    
+    await update.effective_message.reply_text(
+        members_text,
+        parse_mode=ParseMode.MARKDOWN
+    )
+    
+    logger.info(f"Members list viewed for group {group_id} by {user_id}")
+
+
 # ========================= BROADCAST COMMAND ========================= #
 
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1224,22 +1371,24 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             if "bot was blocked" in error_str or "user is deactivated" in error_str:
                 blocked_count += 1
                 logger.info(f"User {user_broadcast_id} blocked the bot")
-                # Remove from registered users
-                REGISTERED_USERS.discard(user_broadcast_id)
-                _save_registered_users(REGISTERED_USERS)
+                # Remove from database
+                if user_broadcast_id in USERS_DATABASE:
+                    del USERS_DATABASE[user_broadcast_id]
+                    _save_users_database()
                 
             elif "chat not found" in error_str or "user not found" in error_str:
                 failed_users += 1
                 logger.warning(f"User {user_broadcast_id} not found")
-                # Remove from registered users
-                REGISTERED_USERS.discard(user_broadcast_id)
-                _save_registered_users(REGISTERED_USERS)
+                # Remove from database
+                if user_broadcast_id in USERS_DATABASE:
+                    del USERS_DATABASE[user_broadcast_id]
+                    _save_users_database()
                 
             else:
                 failed_users += 1
     
     # Send message to each group
-    for idx, group_id in enumerate(REGISTERED_GROUPS, 1):
+    for idx, group_id in enumerate(GROUPS_DATABASE.keys(), 1):
         try:
             # Add delay between messages to avoid rate limiting
             if idx > 1:
@@ -1259,9 +1408,10 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             # Check if bot was kicked/removed from group
             if "bot was kicked" in error_str or "bot is not a member" in error_str or "chat not found" in error_str:
                 logger.info(f"Bot removed from group {group_id}")
-                # Remove from registered groups
-                REGISTERED_GROUPS.discard(group_id)
-                _save_registered_groups(REGISTERED_GROUPS)
+                # Remove from database
+                if group_id in GROUPS_DATABASE:
+                    del GROUPS_DATABASE[group_id]
+                    _save_groups_database()
                 
             else:
                 failed_groups += 1
@@ -1621,7 +1771,13 @@ async def all_mention_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         return  # Not an @all mention, let other handlers process it
     
     # Register group
-    await _register_group(update.effective_chat.id)
+    await _register_group(update.effective_chat.id, update.effective_chat)
+    
+    # Register the user who sent @all command as a member
+    user_id = update.effective_user.id
+    username = update.effective_user.username
+    first_name = update.effective_user.first_name or "User"
+    await _register_group_member(update.effective_chat.id, user_id, username, first_name)
     
     # Check admin status
     is_admin = await _check_admin_status(update, context)
@@ -3028,11 +3184,16 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         
         # Register user
         user_id = update.effective_user.id
+        username = update.effective_user.username
+        first_name = update.effective_user.first_name or "User"
         await _register_user(user_id)
         
         # Register group
         group_id = update.effective_chat.id
-        await _register_group(group_id)
+        await _register_group(group_id, update.effective_chat)
+        
+        # Register group member
+        await _register_group_member(group_id, user_id, username, first_name)
         
         message_text_lower = message_text.lower().strip()
         
@@ -3191,6 +3352,21 @@ async def post_shutdown(app: Application) -> None:
 def main() -> None:
     """Main function to run the bot"""
     
+    # Log AI service configuration
+    logger.info("=" * 50)
+    logger.info("🤖 ANIMX CLAN Bot Starting...")
+    logger.info("=" * 50)
+    if OPENROUTER_API_KEY:
+        logger.info(f"✅ OpenRouter: Enabled (Model: {OPENROUTER_MODEL})")
+    else:
+        logger.info("❌ OpenRouter: Disabled")
+    
+    if GEMINI_API_KEY and GEMINI_CLIENT:
+        logger.info("✅ Gemini: Enabled (Fallback)")
+    else:
+        logger.info("❌ Gemini: Disabled")
+    logger.info("=" * 50)
+    
     # Build application with extended timeouts
     request = HTTPXRequest(
         connect_timeout=20.0,
@@ -3241,6 +3417,7 @@ def main() -> None:
     application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(CommandHandler("users", users_command))
     application.add_handler(CommandHandler("groups", groups_command))
+    application.add_handler(CommandHandler("members", members_command))
     
     # Song download commands
     application.add_handler(CommandHandler("song", song_command))
