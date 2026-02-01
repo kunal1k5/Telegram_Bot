@@ -1,11 +1,33 @@
+# Python
 .venv/
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.egg-info/
+dist/
+build/
+
+# Logs
 *.log
+bot_debug.log
+bot_log.txt
+
+# Telegram sessions
 *.session
 *.session-journal
+
+# Downloads
 downloads/
+
+# Environment
 .env
+
+# Databases (optional - uncomment if you want to track them)
+# users_database.json
+# groups_database.json
+
+# Temporary files
+*.tmp
+*.temp
 bot.text

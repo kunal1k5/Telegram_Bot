@@ -7,11 +7,11 @@ import time
 import subprocess
 import shutil
 from pathlib import Path
-from typing import Final, Dict, List, Tuple, Optional, Set
+from typing import Final, Dict, List, Tuple, Optional, Set, Any
 
 import httpx
 import google.generativeai as genai
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Chat
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Chat, ChatPermissions
 from telegram.constants import ChatType, ParseMode, ChatMemberStatus
 from telegram.request import HTTPXRequest
 from telegram.ext import (
@@ -21,6 +21,7 @@ from telegram.ext import (
     ContextTypes,
     CallbackQueryHandler,
     MessageHandler,
+    ChatMemberHandler,
     filters,
 )
 
@@ -105,6 +106,32 @@ def _save_registered_users(user_ids: Set[int]) -> None:
 
 # In-memory set of registered users
 REGISTERED_USERS: Set[int] = _load_registered_users()
+
+# ========================= OPT-OUT SYSTEM ========================= #
+
+OPTED_OUT_DB_FILE: Final[Path] = Path("opted_out_users.json")
+
+def _load_opted_out_users() -> Set[int]:
+    """Load opted-out user IDs from JSON file"""
+    try:
+        if OPTED_OUT_DB_FILE.exists():
+            with open(OPTED_OUT_DB_FILE, "r") as f:
+                data = json.load(f)
+                return set(data.get("user_ids", []))
+    except Exception as e:
+        logger.warning(f"Could not load opted-out database: {e}")
+    return set()
+
+def _save_opted_out_users(user_ids: Set[int]) -> None:
+    """Save opted-out user IDs to JSON file"""
+    try:
+        with open(OPTED_OUT_DB_FILE, "w") as f:
+            json.dump({"user_ids": list(user_ids)}, f, indent=2)
+    except Exception as e:
+        logger.error(f"Could not save opted-out database: {e}")
+
+# In-memory set of opted-out users
+OPTED_OUT_USERS: Set[int] = _load_opted_out_users()
 
 # Language preferences per user: {user_id: "hindi" | "english" | "hinglish"}
 LANGUAGE_PREFERENCES: Dict[int, str] = {}
@@ -205,6 +232,144 @@ def _set_cooldown(chat_id: int) -> None:
     """Set cooldown for /all command"""
     TAGGING_COOLDOWN[chat_id] = time.time()
 
+# ========================= ANTI-SPAM SYSTEM ========================= #
+
+# Track messages per user: {(chat_id, user_id): [(message_text, timestamp), ...]}
+USER_MESSAGES: Dict[Tuple[int, int], List[Tuple[str, float]]] = {}
+
+# Track warned users: {(chat_id, user_id): timestamp}
+WARNED_USERS: Dict[Tuple[int, int], float] = {}
+
+# Spam detection patterns
+SPAM_LINK_PATTERNS = [
+    r't\.me/joinchat',
+    r'telegram\.me/joinchat',
+    r'bit\.ly',
+    r'tinyurl\.com',
+    r'shorturl\.at',
+    r'cutt\.ly',
+    r'gg\.gg',
+]
+
+def _is_spam_link(text: str) -> bool:
+    """Check if message contains spam links"""
+    import re
+    text_lower = text.lower()
+    for pattern in SPAM_LINK_PATTERNS:
+        if re.search(pattern, text_lower):
+            return True
+    return False
+
+def _count_emojis(text: str) -> int:
+    """Count emoji characters in text"""
+    emoji_count = 0
+    for char in text:
+        if ord(char) > 0x1F300:  # Basic emoji range check
+            emoji_count += 1
+    return emoji_count
+
+async def _check_spam(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """
+    Check if message is spam and handle it.
+    Returns True if message was spam and handled, False otherwise.
+    """
+    # Only work in groups
+    if update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        return False
+    
+    # Don't check messages without text
+    if not update.message or not update.message.text:
+        return False
+    
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    message_text = update.message.text
+    current_time = time.time()
+    
+    # Never moderate admins
+    try:
+        member = await context.bot.get_chat_member(chat_id, user_id)
+        if member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
+            return False
+    except:
+        pass
+    
+    # Check if bot is admin (needed to delete messages)
+    try:
+        bot_member = await context.bot.get_chat_member(chat_id, context.bot.id)
+        if bot_member.status not in [ChatMemberStatus.ADMINISTRATOR]:
+            return False  # Bot can't delete messages
+    except:
+        return False
+    
+    # Initialize tracking for this user
+    user_key = (chat_id, user_id)
+    if user_key not in USER_MESSAGES:
+        USER_MESSAGES[user_key] = []
+    
+    # Clean old messages (older than 60 seconds)
+    USER_MESSAGES[user_key] = [
+        (msg, ts) for msg, ts in USER_MESSAGES[user_key]
+        if current_time - ts < 60
+    ]
+    
+    # Add current message
+    USER_MESSAGES[user_key].append((message_text, current_time))
+    
+    is_spam = False
+    spam_reason = ""
+    
+    # Check 1: Same message sent 3 times
+    message_counts = {}
+    for msg, _ in USER_MESSAGES[user_key]:
+        message_counts[msg] = message_counts.get(msg, 0) + 1
+    
+    if message_counts.get(message_text, 0) >= 3:
+        is_spam = True
+        spam_reason = "repeated message"
+    
+    # Check 2: More than 5 messages in 10 seconds
+    if not is_spam:
+        recent_messages = [
+            (msg, ts) for msg, ts in USER_MESSAGES[user_key]
+            if current_time - ts < 10
+        ]
+        if len(recent_messages) > 5:
+            is_spam = True
+            spam_reason = "flooding"
+    
+    # Check 3: Spam links
+    if not is_spam and _is_spam_link(message_text):
+        is_spam = True
+        spam_reason = "spam link"
+    
+    # Check 4: Emoji flood (10+ emojis)
+    if not is_spam and _count_emojis(message_text) >= 10:
+        is_spam = True
+        spam_reason = "emoji flood"
+    
+    # Handle spam
+    if is_spam:
+        try:
+            # Delete the spam message
+            await update.message.delete()
+            logger.info(f"Deleted spam message from user {user_id}: {spam_reason}")
+            
+            # Send warning only once per user (within 5 minutes)
+            if user_key not in WARNED_USERS or current_time - WARNED_USERS[user_key] > 300:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"Thoda slow 🙂 spam mat karo"
+                )
+                WARNED_USERS[user_key] = current_time
+            
+            return True
+        
+        except Exception as e:
+            logger.error(f"Spam handling error: {e}")
+    
+    return False
+
 # ========================= SONG DOWNLOAD SYSTEM ========================= #
 
 # Download directory setup (Windows & Linux compatible)
@@ -268,8 +433,13 @@ def _search_and_get_urls(query: str) -> List[str]:
     logger.warning(f"❌ No search results found for: {query}")
     return []
 
-def _download_audio_sync(url: str, output_dir: Path) -> Optional[Path]:
-    """Download audio using yt-dlp (sync function for use with asyncio.to_thread)"""
+def _download_audio_sync(url: str, output_dir: Path) -> Optional[Tuple[Path, Dict[str, Any]]]:
+    """Download audio using yt-dlp (sync function for use with asyncio.to_thread)
+    
+    Returns:
+        Tuple of (file_path, metadata_dict) or None if failed
+        metadata_dict contains: title, performer, duration
+    """
     if not yt_dlp:
         logger.error("yt-dlp not available")
         return None
@@ -288,6 +458,11 @@ def _download_audio_sync(url: str, output_dir: Path) -> Optional[Path]:
             "retries": 3,
             "fragment_retries": 3,
             "ignoreerrors": False,
+            "postprocessors": [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192",
+            }],
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -298,9 +473,25 @@ def _download_audio_sync(url: str, output_dir: Path) -> Optional[Path]:
                 logger.warning(f"No info returned from yt-dlp for: {url}")
                 return None
             
-            # Get the downloaded file path
+            # Extract metadata
+            title = info.get("title", "Unknown Title")[:100]
+            performer = info.get("uploader", info.get("channel", "Unknown Artist"))[:100]
+            duration = info.get("duration", 0)  # in seconds
+            
+            metadata = {
+                "title": title,
+                "performer": performer,
+                "duration": int(duration) if duration else None,
+            }
+            
+            # Get the downloaded file path (with .mp3 extension after postprocessing)
             filename = ydl.prepare_filename(info)
             file_path = Path(filename)
+            
+            # Check for .mp3 file if postprocessing was done
+            mp3_path = file_path.with_suffix(".mp3")
+            if mp3_path.exists():
+                file_path = mp3_path
             
             logger.info(f"File path: {file_path}")
             logger.info(f"File exists: {file_path.exists()}")
@@ -308,7 +499,8 @@ def _download_audio_sync(url: str, output_dir: Path) -> Optional[Path]:
             if file_path.exists():
                 file_size = file_path.stat().st_size
                 logger.info(f"✅ Downloaded: {file_path.name} ({file_size / 1024:.1f}KB)")
-                return file_path
+                logger.info(f"📝 Metadata: {metadata}")
+                return (file_path, metadata)
             else:
                 logger.warning(f"Downloaded file not found at: {file_path}")
     
@@ -606,11 +798,62 @@ def get_gemini_response(user_message: str, user_name: str = "User", system_promp
 
 # ========================= COMMAND HANDLERS ========================= #
 
+async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle when bot is added to or removed from a group"""
+    try:
+        if not update.my_chat_member:
+            return
+        
+        chat = update.effective_chat
+        new_status = update.my_chat_member.new_chat_member.status
+        old_status = update.my_chat_member.old_chat_member.status
+        
+        # Check if bot was added to a group
+        if chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
+            # Bot was added to group
+            if new_status in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR] and \
+               old_status not in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR]:
+                await _register_group(chat.id)
+                logger.info(f"✅ Bot added to group: {chat.title} ({chat.id})")
+                
+                # Send welcome message
+                try:
+                    await context.bot.send_message(
+                        chat_id=chat.id,
+                        text=(
+                            "🎉 Heyy! Main Baby hoon ❤️\n\n"
+                            "Commands:\n"
+                            "/song <name> - Gana download karo 🎵\n"
+                            "/help - Saari commands dekho\n"
+                            "/all - Sabko tag karo (admin only)\n\n"
+                            "Bas 'baby' bolke mujhe bula lo 😄"
+                        )
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not send welcome message to group {chat.id}: {e}")
+            
+            # Bot was removed from group
+            elif new_status in [ChatMemberStatus.LEFT, ChatMemberStatus.BANNED] and \
+                 old_status in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR]:
+                if chat.id in REGISTERED_GROUPS:
+                    REGISTERED_GROUPS.discard(chat.id)
+                    _save_registered_groups(REGISTERED_GROUPS)
+                logger.info(f"❌ Bot removed from group: {chat.title} ({chat.id})")
+    
+    except Exception as e:
+        logger.error(f"Error in my_chat_member_handler: {e}")
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start command with inline buttons"""
     # Register user
     user_id = update.effective_user.id
     await _register_user(user_id)
+    
+    # Remove from opted-out list if they were opted out
+    if user_id in OPTED_OUT_USERS:
+        OPTED_OUT_USERS.discard(user_id)
+        _save_opted_out_users(OPTED_OUT_USERS)
+        logger.info(f"📥 User {user_id} opted back in to broadcasts")
     
     logger.info(
         "/start - chat_id=%s, user=%s",
@@ -653,6 +896,37 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
 
+async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /stop command - Opt out of broadcasts"""
+    user_id = update.effective_user.id
+    
+    # Only works in private chat
+    if update.effective_chat.type != ChatType.PRIVATE:
+        await update.effective_message.reply_text(
+            "❌ Ye command sirf private chat mein use kar sakte ho."
+        )
+        return
+    
+    # Check if already opted out
+    if user_id in OPTED_OUT_USERS:
+        await update.effective_message.reply_text(
+            "✅ Tumhe pehle se hi broadcasts nahi mil rahe hain.\n\n"
+            "Agar dobara chahiye toh /start karke fir se activate kar sakte ho! 😊"
+        )
+        return
+    
+    # Add to opted-out list
+    OPTED_OUT_USERS.add(user_id)
+    _save_opted_out_users(OPTED_OUT_USERS)
+    
+    logger.info(f"📵 User {user_id} opted out of broadcasts")
+    
+    await update.effective_message.reply_text(
+        "✅ Done! Ab tumhe broadcasts nahi aayenge.\n\n"
+        "Agar kabhi wapas chahiye toh /start karke dobara activate kar sakte ho! 💕"
+    )
+
+
 # ========================= BROADCAST COMMAND ========================= #
 
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -680,13 +954,18 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     # Get message to broadcast
     broadcast_message = " ".join(context.args)
     
+    # Filter out opted-out users
+    active_users = REGISTERED_USERS - OPTED_OUT_USERS
+    
     # Send confirmation with user and group count
-    total_users = len(REGISTERED_USERS)
+    total_users = len(active_users)
     total_groups = len(REGISTERED_GROUPS)
+    opted_out_count = len(OPTED_OUT_USERS & REGISTERED_USERS)
     total_recipients = total_users + total_groups
     
     confirm_msg = await update.effective_message.reply_text(
-        f"📢 Broadcasting to {total_users} users + {total_groups} groups...\n\n"
+        f"📢 Broadcasting to {total_users} users + {total_groups} groups...\n"
+        f"({opted_out_count} users opted out)\n\n"
         f"Message: \"{broadcast_message}\"\n\n"
         f"Please wait... 🔄"
     )
@@ -700,8 +979,8 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     
     logger.info(f"📢 Starting broadcast to {total_users} users and {total_groups} groups")
     
-    # Send message to each user
-    for idx, user_broadcast_id in enumerate(REGISTERED_USERS, 1):
+    # Send message to each active user (excluding opted-out)
+    for idx, user_broadcast_id in enumerate(active_users, 1):
         try:
             # Add delay between messages to avoid rate limiting
             if idx > 1:
@@ -776,7 +1055,8 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         f"👤 Users:\n"
         f"  ✔️ Sent: {sent_to_users}/{total_users}\n"
         f"  ✗ Failed: {failed_users}\n"
-        f"  🔒 Blocked: {blocked_count}\n\n"
+        f"  🔒 Blocked: {blocked_count}\n"
+        f"  📵 Opted out: {opted_out_count}\n\n"
         f"👥 Groups:\n"
         f"  ✔️ Sent: {sent_to_groups}/{total_groups}\n"
         f"  ✗ Failed: {failed_groups}\n\n"
@@ -825,6 +1105,7 @@ async def song_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         
         # Try each result until one works
         audio_file = None
+        metadata = None
         successful_url = None
         
         for attempt, url in enumerate(video_urls, 1):
@@ -836,28 +1117,31 @@ async def song_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     await search_msg.edit_text(f"Hmm ek aur try karti hoon 😄 (attempt {attempt}/{len(video_urls)})")
                 
                 # Download in thread
-                audio_file = await asyncio.to_thread(_download_audio_sync, url, user_dir)
+                result = await asyncio.to_thread(_download_audio_sync, url, user_dir)
                 
-                if audio_file and audio_file.exists():
-                    file_size = audio_file.stat().st_size
+                if result:
+                    audio_file, metadata = result
                     
-                    # Validate file size
-                    if file_size < 1000:  # Less than 1KB is corrupted
-                        logger.warning(f"File too small ({file_size} bytes): {audio_file.name}")
-                        audio_file.unlink()
-                        audio_file = None
-                        continue
-                    
-                    if file_size > MAX_FILE_SIZE:  # More than 50MB
-                        logger.warning(f"File too large ({file_size / 1024 / 1024:.1f}MB): {audio_file.name}")
-                        audio_file.unlink()
-                        audio_file = None
-                        continue
-                    
-                    # Success!
-                    successful_url = url
-                    logger.info(f"✅ Successfully downloaded: {audio_file.name} ({file_size / 1024:.1f}KB)")
-                    break
+                    if audio_file and audio_file.exists():
+                        file_size = audio_file.stat().st_size
+                        
+                        # Validate file size
+                        if file_size < 1000:  # Less than 1KB is corrupted
+                            logger.warning(f"File too small ({file_size} bytes): {audio_file.name}")
+                            audio_file.unlink()
+                            audio_file = None
+                            continue
+                        
+                        if file_size > MAX_FILE_SIZE:  # More than 50MB
+                            logger.warning(f"File too large ({file_size / 1024 / 1024:.1f}MB): {audio_file.name}")
+                            audio_file.unlink()
+                            audio_file = None
+                            continue
+                        
+                        # Success!
+                        successful_url = url
+                        logger.info(f"✅ Successfully downloaded: {audio_file.name} ({file_size / 1024:.1f}KB)")
+                        break
             
             except Exception as e:
                 logger.warning(f"Attempt {attempt} failed for {url}: {e}")
@@ -867,6 +1151,7 @@ async def song_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     except:
                         pass
                 audio_file = None
+                metadata = None
                 continue
         
         # Check if we got a valid file
@@ -875,15 +1160,17 @@ async def song_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             logger.error(f"Failed to download any version of: {song_name}")
             return
         
-        # Success! Update message
-        await search_msg.edit_text("Mil gaya ❤️ enjoy")
+        # Success! Update message with proper response
+        await search_msg.edit_text("🎵 Song ready 😄\nPlay karke suno, pause bhi kar sakte ho ❤️")
         
-        # Send the audio file
+        # Send the audio file with proper metadata
         try:
             with open(audio_file, "rb") as f:
                 await update.effective_message.reply_audio(
                     f,
-                    title=audio_file.stem[:100],
+                    title=metadata.get("title", audio_file.stem[:100]) if metadata else audio_file.stem[:100],
+                    performer=metadata.get("performer", "Unknown Artist") if metadata else "Unknown Artist",
+                    duration=metadata.get("duration") if metadata else None,
                     reply_to_message_id=update.effective_message.message_id,
                 )
             
@@ -946,7 +1233,14 @@ async def yt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     
     try:
         # Download from the provided link in a thread
-        audio_file = await asyncio.to_thread(_download_audio_sync, youtube_link, user_dir)
+        result = await asyncio.to_thread(_download_audio_sync, youtube_link, user_dir)
+        
+        if not result:
+            await search_msg.edit_text("Aww 😅 ye gana nahi mil raha")
+            logger.warning(f"Download failed for YouTube link: {youtube_link}")
+            return
+        
+        audio_file, metadata = result
         
         if not audio_file or not audio_file.exists():
             await search_msg.edit_text("Aww 😅 ye gana nahi mil raha")
@@ -969,15 +1263,17 @@ async def yt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             )
             return
         
-        # Success! Update message
-        await search_msg.edit_text("Mil gaya ❤️ enjoy")
+        # Success! Update message with proper response
+        await search_msg.edit_text("🎵 Song ready 😄\nPlay karke suno, pause bhi kar sakte ho ❤️")
         
-        # Send file to user
+        # Send file to user with proper metadata
         try:
             with open(audio_file, "rb") as f:
                 await update.effective_message.reply_audio(
                     f,
-                    title=audio_file.stem[:100],
+                    title=metadata.get("title", audio_file.stem[:100]) if metadata else audio_file.stem[:100],
+                    performer=metadata.get("performer", "Unknown Artist") if metadata else "Unknown Artist",
+                    duration=metadata.get("duration") if metadata else None,
                     reply_to_message_id=update.effective_message.message_id,
                 )
             
@@ -1302,6 +1598,1068 @@ async def mood_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.effective_message.reply_text(message)
 
 
+async def ga_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /ga (Good Afternoon) command"""
+    await _register_user(update.effective_user.id)
+    user_name = update.effective_user.first_name or "Bhai"
+    
+    ga_messages = [
+        f"Good afternoon ☀️ {user_name}! Lunch ho gaya? Kuch achha khaya? 😋",
+        f"Afternoon {user_name}! 🌞 Dopahar ka time hai, thoda rest le lo 😊",
+        f"Namaste {user_name}! 👋 Afternoon ka vibe kaisa hai? Mast? 🌤️",
+        f"Good afternoon ✨ {user_name}! Din kaisa ja raha hai? Productive? 💪",
+        f"Afternoon ho gayi {user_name}! ☀️ Kuch special plan hai shaam ke liye? 😄"
+    ]
+    
+    await update.effective_message.reply_text(random.choice(ga_messages))
+
+
+async def ge_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /ge (Good Evening) command"""
+    await _register_user(update.effective_user.id)
+    user_name = update.effective_user.first_name or "Bhai"
+    
+    ge_messages = [
+        f"Good evening 🌆 {user_name}! Din kaisa gaya? Achha tha? 😊",
+        f"Evening ho gayi {user_name}! 🌅 Chai-pakode ka time hai 😋☕",
+        f"Shaam ko bhi yaad kar liya? 🌆 Sweet! Evening {user_name}! ❤️",
+        f"Good evening ✨ {user_name}! Ab chill karo, din khatam ho gaya 😊",
+        f"Evening vibes 🌇 {user_name}! Relax mode on kar lo 😄"
+    ]
+    
+    await update.effective_message.reply_text(random.choice(ge_messages))
+
+
+async def chat_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /chat command - Start conversation"""
+    await _register_user(update.effective_user.id)
+    user_name = update.effective_user.first_name or "Bhai"
+    
+    chat_messages = [
+        f"Haan {user_name}! 😄 Bol kya baat karni hai? Main sun rahi hoon 👂",
+        f"Bilkul {user_name}! 💬 Batao kya chal raha hai life mein? 😊",
+        f"Chal {user_name}! ✨ Shuru karte hain conversation! Kya hua? 😄",
+        f"Haan bhai {user_name}! 👋 Main ready hoon, tu bata kya discuss karenge? 💭"
+    ]
+    
+    await update.effective_message.reply_text(random.choice(chat_messages))
+
+
+async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /ask command - Answer questions"""
+    await _register_user(update.effective_user.id)
+    user_name = update.effective_user.first_name or "Bhai"
+    
+    if not context.args:
+        await update.effective_message.reply_text(
+            f"Arre {user_name}! 😊 Kuch pucho na!\n\n"
+            "Format: /ask <question>\n"
+            "Example: /ask Python kya hai?"
+        )
+        return
+    
+    question = " ".join(context.args)
+    
+    # Use AI to answer
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    
+    try:
+        answer = get_ai_response(question, user_name, SYSTEM_PROMPT)
+        await update.effective_message.reply_text(answer)
+    except Exception as e:
+        logger.error(f"Ask command error: {e}")
+        await update.effective_message.reply_text(
+            f"Hmm {user_name}, thoda network issue lag raha hai 😅 Phir se pucho na!"
+        )
+
+
+async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /about command - Bot introduction"""
+    await _register_user(update.effective_user.id)
+    user_name = update.effective_user.first_name or "Bhai"
+    
+    about_messages = [
+        f"Hii {user_name}! 😊 Main Baby hoon ❤️\n\n"
+        "Main ek friendly bot hoon jo tumse baat karta hai 💬\n"
+        "Songs download karti hoon 🎵\n"
+        "Aur tumhara mood achha rakhti hoon ✨\n\n"
+        "Bas mujhe 'baby' bolke bula lo! 😄",
+        
+        f"Hello {user_name}! 👋\n\n"
+        "Main Baby hoon - tumhari dost ❤️\n"
+        "Gaane sunau, baat karu, help karu 😊\n"
+        "Hinglish mein friendly talks! 💭\n\n"
+        "Bas yaad se bula lena 😄",
+        
+        f"Namaste {user_name}! 🙏\n\n"
+        "Main Baby ❤️ - cute aur friendly!\n"
+        "Songs 🎵, chats 💬, aur masti 😄\n"
+        "Hinglish speaking human-like bot!\n\n"
+        "Mujhse baat karo! 😊"
+    ]
+    
+    await update.effective_message.reply_text(random.choice(about_messages))
+
+
+async def privacy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /privacy command"""
+    await _register_user(update.effective_user.id)
+    
+    privacy_text = (
+        "🔒 *Privacy Policy*\n\n"
+        "✅ Main tumhari personal info store nahi karti\n"
+        "✅ Messages private rehti hain\n"
+        "✅ Data safe aur secure hai\n"
+        "✅ Sirf chat_id save hoti hai\n\n"
+        "Tum safe ho mere saath! 😊❤️"
+    )
+    
+    await update.effective_message.reply_text(privacy_text, parse_mode=ParseMode.MARKDOWN)
+
+
+async def sad_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /sad command - Emotional support"""
+    await _register_user(update.effective_user.id)
+    user_name = update.effective_user.first_name or "Bhai"
+    
+    sad_messages = [
+        f"Aww {user_name} 🥺 Udaas ho? Koi baat nahi, main hoon na!\n"
+        "Yaad rakho - ye phase guzar jayega ✨\n"
+        "Tum strong ho 💪 Smile karo! 😊",
+        
+        f"{user_name}, sun mere baat 🤗\n"
+        "Sad hona normal hai, but permanent nahi hai!\n"
+        "Kal better hoga ✨ Trust me!\n"
+        "Main hoon tumhare saath ❤️",
+        
+        f"Arre {user_name}! 🥺 Kya hua?\n"
+        "Life mein ups-downs toh aate hain\n"
+        "But tum warrior ho 💪\n"
+        "Cheer up! Main yahi hoon 😊❤️",
+        
+        f"{user_name}, relax 🌸\n"
+        "Har raat ke baad subah hoti hai ☀️\n"
+        "Tum iss se stronger nikalne wale ho!\n"
+        "Believe karo apne aap pe 💖"
+    ]
+    
+    await update.effective_message.reply_text(random.choice(sad_messages))
+
+
+async def happy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /happy command - Celebrate happiness"""
+    await _register_user(update.effective_user.id)
+    user_name = update.effective_user.first_name or "Bhai"
+    
+    happy_messages = [
+        f"Yayy {user_name}! 🎉 Happy ho? Mujhe bhi khushi hui!\n"
+        "Ye energy maintain rakho! 😄✨\n"
+        "Zindagi mast hai! ❤️",
+        
+        f"Wohoo {user_name}! 🥳 Happiness dekh ke main bhi khush!\n"
+        "Is positivity ko spread karo 🌟\n"
+        "Keep smiling! 😊💕",
+        
+        f"Amazing {user_name}! 🎊 Tumhari khushi meri khushi!\n"
+        "Life is beautiful na? 🌈\n"
+        "Enjoy every moment! 😄❤️",
+        
+        f"Superb {user_name}! ✨ Happy vibes I love it!\n"
+        "Aise hi mast raho 😊\n"
+        "Tumhari smile precious hai! 💖"
+    ]
+    
+    await update.effective_message.reply_text(random.choice(happy_messages))
+
+
+async def angry_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /angry command - Calming advice"""
+    await _register_user(update.effective_user.id)
+    user_name = update.effective_user.first_name or "Bhai"
+    
+    angry_messages = [
+        f"Arre {user_name}! 😊 Gussa ho? Thoda relax karo\n"
+        "Deep breath lo 🌬️\n"
+        "Anger temporary hai, peace permanent 🕊️\n"
+        "Chill karo! ✨",
+        
+        f"{user_name}, sun 🙏 Gussa sahi nahi!\n"
+        "Kuch minutes wait karo\n"
+        "Shaant dimag se sochna better hai 💭\n"
+        "Main samajh sakti hoon! 😊",
+        
+        f"Relax {user_name}! 🌸 Anger hota hai\n"
+        "But isse handle karo smartly 🧠\n"
+        "Calm down, breathe, think 💆\n"
+        "Sab theek ho jayega! ❤️",
+        
+        f"Oye {user_name}! 😅 Cool down bro\n"
+        "Gusse mein galat decision mat lo\n"
+        "Thoda time do apne aap ko ⏰\n"
+        "Peace is power! ✌️"
+    ]
+    
+    await update.effective_message.reply_text(random.choice(angry_messages))
+
+
+async def motivate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /motivate command - Motivational messages"""
+    await _register_user(update.effective_user.id)
+    user_name = update.effective_user.first_name or "Bhai"
+    
+    motivate_messages = [
+        f"{user_name}, sun! 💪\nTum capable ho kuch bhi karne ke liye!\nBas believe karo aur try karo! 🚀",
+        f"Arre {user_name}! ✨\nHar mushkil ka solution hota hai\nGive up mat karo! 💯",
+        f"{user_name}, remember! 🌟\nSuccess waiting hai tumhare liye\nBas ek step aur! 🎯",
+        f"Yaar {user_name}! 💪\nTum warrior ho!\nKoi tumhe rok nahi sakta! 🔥",
+        f"Listen {user_name}! 🌈\nDreams sach hote hain\nWork hard aur patient raho! ⏰",
+        f"{user_name}, focus! 🎯\nTumhare andar talent hai\nDimag pe zor do! 🧠",
+        f"Bhai {user_name}! 💖\nFailure is learning\nHar try tumhe better banati hai! 📈",
+        f"{user_name}, push harder! 🚀\nGoals door nahi, paas hain\nThoda aur effort! 💪"
+    ]
+    
+    await update.effective_message.reply_text(random.choice(motivate_messages))
+
+
+async def howareyou_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /howareyou command"""
+    await _register_user(update.effective_user.id)
+    user_name = update.effective_user.first_name or "Bhai"
+    
+    howareyou_messages = [
+        f"Main achhi hoon {user_name}! 😊 Thanks for asking!\nTum kaise ho? ❤️",
+        f"Bilkul mast {user_name}! 😄 Tumne pucha na toh aur achha lag raha! 💕",
+        f"Main theek hoon yaar! ✨ Tum batao, tumhara din kaisa ja raha hai? 😊",
+        f"All good {user_name}! 😊 Tumhari care sweet hai! Tumhara kya haal? 🌸"
+    ]
+    
+    await update.effective_message.reply_text(random.choice(howareyou_messages))
+
+
+async def missyou_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /missyou command"""
+    await _register_user(update.effective_user.id)
+    user_name = update.effective_user.first_name or "Bhai"
+    
+    missyou_messages = [
+        f"Aww {user_name}! 🥺 Main bhi tumhe miss kar rahi thi!\nLong time no see! ❤️",
+        f"Miss you too {user_name}! 💕 Itne din kaha the? Glad you're back! 😊",
+        f"{user_name}! 🥰 Main yahi hoon na! Tumhe bhi miss kar rahi thi! 💖",
+        f"Oye {user_name}! 😊 Miss me? Sweet! Main bhi yaad kar rahi thi tumhe! ❤️"
+    ]
+    
+    await update.effective_message.reply_text(random.choice(missyou_messages))
+
+
+async def thankyou_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /thankyou command"""
+    await _register_user(update.effective_user.id)
+    user_name = update.effective_user.first_name or "Bhai"
+    
+    thankyou_messages = [
+        f"You're welcome {user_name}! 😊 Meri khushi hai help karna! ❤️",
+        f"No problem yaar! 🤗 Tere liye kuch bhi {user_name}! 💕",
+        f"Arre koi baat nahi {user_name}! 😄 Main hoon na tumhare liye! ✨",
+        f"Anytime {user_name}! 💖 Mere se na sharma! 😊"
+    ]
+    
+    await update.effective_message.reply_text(random.choice(thankyou_messages))
+
+
+async def hug_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /hug command"""
+    await _register_user(update.effective_user.id)
+    user_name = update.effective_user.first_name or "Bhai"
+    
+    hug_messages = [
+        f"🤗 *gives tight hug to {user_name}*\nAww! Feel better? ❤️",
+        f"*hugs {user_name} warmly* 🤗\nYou needed this! Everything will be okay! 💕",
+        f"🤗 Aaaja {user_name}! *virtual hug*\nYou're amazing! ❤️",
+        f"*squeezes {user_name} in a hug* 🤗💖\nFeeling the warmth? Main hoon na! 😊"
+    ]
+    
+    await update.effective_message.reply_text(random.choice(hug_messages))
+
+
+async def tip_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /tip command - Daily life tips"""
+    await _register_user(update.effective_user.id)
+    
+    tips = [
+        "💡 *Daily Tip*\nSubah jaldi utho! Morning productivity best hoti hai ☀️",
+        "💡 *Daily Tip*\nPaani zyada piyo! 8-10 glass must hai 💧",
+        "💡 *Daily Tip*\nScreen time kam karo, eyes ko rest do 👀✨",
+        "💡 *Daily Tip*\n5 minutes meditation daily - game changer hai 🧘",
+        "💡 *Daily Tip*\nTo-do list banao! Organized life = peaceful life 📝",
+        "💡 *Daily Tip*\nWalk karo daily! 30 minutes is enough 🚶",
+        "💡 *Daily Tip*\nBooks padho! Knowledge is power 📚",
+        "💡 *Daily Tip*\nPositive sochao! Negativity se door raho ✨",
+        "💡 *Daily Tip*\nFamily time zaruri hai! Quality time spend karo ❤️",
+        "💡 *Daily Tip*\nGratitude practice karo! Thank you bolo daily 🙏"
+    ]
+    
+    await update.effective_message.reply_text(random.choice(tips), parse_mode=ParseMode.MARKDOWN)
+
+
+async def confidence_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /confidence command"""
+    await _register_user(update.effective_user.id)
+    user_name = update.effective_user.first_name or "Bhai"
+    
+    confidence_messages = [
+        f"{user_name}, tum perfect ho! 💯\nApne aap pe believe karo\nConfidence tumhara superpower hai! 🦸",
+        f"Listen {user_name}! 🌟\nTum unique ho\nKisi se compare mat karo\nBe confidently YOU! 💪",
+        f"{user_name}, yaad rakho! ✨\nTumhare andar power hai\nDarna nahi, shine karna hai! 🌟",
+        f"Arre {user_name}! 🔥\nSelf-doubt ko bhagao\nTum capable ho\nJust believe! 💖"
+    ]
+    
+    await update.effective_message.reply_text(random.choice(confidence_messages))
+
+
+async def focus_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /focus command"""
+    await _register_user(update.effective_user.id)
+    user_name = update.effective_user.first_name or "Bhai"
+    
+    focus_messages = [
+        f"{user_name}, focus tips! 🎯\n"
+        "1. Phone silent karo 📵\n"
+        "2. 25 min work, 5 min break ⏰\n"
+        "3. One task at a time 💪",
+        
+        f"Focus strategy {user_name}! 🧠\n"
+        "• Distractions band karo\n"
+        "• Goal clear rakho\n"
+        "• Pomodoro technique try karo ⏲️",
+        
+        f"Hey {user_name}! 🎯\n"
+        "Focus = Success key\n"
+        "Multitasking nahi, deep work karo\n"
+        "Results guaranteed! 💯",
+        
+        f"{user_name}, productivity hack! ⚡\n"
+        "Morning mein important task\n"
+        "Evening mein creative work\n"
+        "Smart work karo! 🧠"
+    ]
+    
+    await update.effective_message.reply_text(random.choice(focus_messages))
+
+
+async def sleep_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /sleep command"""
+    await _register_user(update.effective_user.id)
+    user_name = update.effective_user.first_name or "Bhai"
+    
+    sleep_messages = [
+        f"{user_name}, sleep is important! 😴\n"
+        "7-8 hours zaruri hai\n"
+        "Phone door rakho bed se\n"
+        "Good sleep = Good life 🌙",
+        
+        f"Sleep tips {user_name}! 💤\n"
+        "• Same time pe sona-uthna\n"
+        "• Room dark rakho\n"
+        "• Stress kam karo\n"
+        "Quality sleep = Quality you! ✨",
+        
+        f"Hey {user_name}! 🌙\n"
+        "Neend achhi honi chahiye\n"
+        "Late night phone avoid karo\n"
+        "Rest is productivity secret! 😊",
+        
+        f"{user_name}, listen! 😴\n"
+        "Sleep sacrifice mat karo\n"
+        "Body ko rest chahiye\n"
+        "Health first! ❤️"
+    ]
+    
+    await update.effective_message.reply_text(random.choice(sleep_messages))
+
+
+async def lifeline_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /lifeline command - Emotional support"""
+    await _register_user(update.effective_user.id)
+    user_name = update.effective_user.first_name or "Bhai"
+    
+    lifeline_message = (
+        f"{user_name}, main yahi hoon! 🤗\n\n"
+        "Agar tough time ja raha hai:\n"
+        "• Deep breath lo 🌬️\n"
+        "• Kisi se baat karo 💬\n"
+        "• Professional help lena okay hai 🏥\n\n"
+        "You're not alone ❤️\n"
+        "Things will get better! ✨\n\n"
+        "Main hamesha tumhare saath hoon! 💖"
+    )
+    
+    await update.effective_message.reply_text(lifeline_message)
+
+
+async def joke_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /joke command"""
+    await _register_user(update.effective_user.id)
+    
+    jokes = [
+        "😄 *Joke*\nTeacher: Beta, tumhare phone mein calculator hai?\nStudent: Haan!\nTeacher: Toh homework mein 2+2 galat kaise? 😂",
+        
+        "😄 *Joke*\nDoctor: Aapko diabetes hai\nPatient: Okay, koi baat nahi\nDoctor: Sugar kam karo\nPatient: WHAT? 😱",
+        
+        "😄 *Joke*\nWife: Tum mujhe pyaar karte ho?\nHusband: Haan\nWife: Kitna?\nHusband: Jitna WiFi ka password yaad hai! 😂",
+        
+        "😄 *Joke*\nBeta: Papa, main fail ho gaya\nPapa: Koi baat nahi, agli baar pass ho jaoge\nBeta: Next week dobara exam hai\nPapa: 😱",
+        
+        "😄 *Joke*\nBoy: I love you\nGirl: Proof do\nBoy: *Screenshot of WhatsApp chat*\nGirl: 😂",
+        
+        "😄 *Joke*\nTeacher: 'I' ke baad 'am' aata hai\nStudent: I aam?\nTeacher: No! I am\nStudent: You're aam? 🥭😂",
+        
+        "😄 *Joke*\nPapa: Beta, bill zyada aa raha hai\nBeta: Light band kar dete hain\nPapa: *turns off son's phone data* 😂",
+        
+        "😄 *Joke*\nGF: Mujhe gift do\nBF: *gives hug* 🤗\nGF: I said gift, not shift! 😂"
+    ]
+    
+    await update.effective_message.reply_text(random.choice(jokes), parse_mode=ParseMode.MARKDOWN)
+
+
+async def roast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /roast command - Light roasting"""
+    await _register_user(update.effective_user.id)
+    user_name = update.effective_user.first_name or "Bhai"
+    
+    roasts = [
+        f"Arre {user_name}! 😂 Tum itne smart ho ki Google bhi confused ho jata hai! 🤭",
+        f"{user_name}, tumhari productivity dekh ke snail bhi motivation lete hain! 😄🐌",
+        f"Oye {user_name}! 😂 Tumhari WiFi speed aur tumhare replies same hai - slow! 🤭",
+        f"{user_name}, tum itne late aate ho ki 'Better late than never' bhi doubt karta hai! 😂",
+        f"Arre {user_name}! 🤭 Tumhare excuses itne creative hain ki Netflix ko scripts de sakte ho! 😄",
+        f"{user_name}, tumhara phone battery aur tumhari energy level same hai - always low! 😂🔋"
+    ]
+    
+    await update.effective_message.reply_text(random.choice(roasts))
+
+
+async def truth_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /truth command"""
+    await _register_user(update.effective_user.id)
+    
+    truths = [
+        "🎯 *Truth Question*\nKya tumne kabhi kisi ko secretly like kiya hai? 😳",
+        "🎯 *Truth Question*\nTumhari sabse embarrassing moment kya thi? 🙈",
+        "🎯 *Truth Question*\nKya tumne kabhi kisi ki copy ki hai exam mein? 📝😅",
+        "🎯 *Truth Question*\nTumhara crush kaun hai? (Honest answer!) 💕",
+        "🎯 *Truth Question*\nKya tumne kabhi kisi ko jhooth bola hai? 🤥",
+        "🎯 *Truth Question*\nTumhari secret talent kya hai? 🎭",
+        "🎯 *Truth Question*\nKya tumne kabhi raat mein khana chori kiya hai? 😂🍕",
+        "🎯 *Truth Question*\nTumhara biggest fear kya hai? 😨"
+    ]
+    
+    await update.effective_message.reply_text(random.choice(truths), parse_mode=ParseMode.MARKDOWN)
+
+
+async def dare_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /dare command"""
+    await _register_user(update.effective_user.id)
+    
+    dares = [
+        "🎲 *Dare*\nApne crush ko 'Hi' message bhejo! 😄💕",
+        "🎲 *Dare*\n5 jumping jacks kar ke proof video bhejo! 💪",
+        "🎲 *Dare*\nApni best friend ko funny voice note bhejo! 🎤😂",
+        "🎲 *Dare*\nNext 10 minutes phone band rakho! 📵",
+        "🎲 *Dare*\nApni favorite song gao aur audio bhejo! 🎵",
+        "🎲 *Dare*\nKisi ko random compliment do! 💕",
+        "🎲 *Dare*\n10 push-ups karo! Right now! 💪",
+        "🎲 *Dare*\nApni weirdest photo share karo! 📸😂"
+    ]
+    
+    await update.effective_message.reply_text(random.choice(dares), parse_mode=ParseMode.MARKDOWN)
+
+
+async def fact_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /fact command - Interesting facts"""
+    await _register_user(update.effective_user.id)
+    
+    facts = [
+        "🌟 *Interesting Fact*\nHoney kabhi kharab nahi hoti! 3000 saal purana honey bhi edible hai 🍯",
+        "🌟 *Amazing Fact*\nDolphins apna naam rakhti hain aur ek-dusre ko naam se bulati hain! 🐬💕",
+        "🌟 *Mind-Blowing Fact*\nEk cloud ka weight approximately 1.1 million pounds hota hai! ☁️",
+        "🌟 *Cool Fact*\nOctopus ke teen hearts hote hain! 🐙❤️❤️❤️",
+        "🌟 *Fascinating Fact*\nBananas technically berries hain, but strawberries nahi! 🍌🍓",
+        "🌟 *Incredible Fact*\nHumans aur bananas 60% DNA share karte hain! 🧬🍌",
+        "🌟 *Wonderful Fact*\nEiffel Tower summer mein 6 inches tall ho jata hai heat se! 🗼☀️",
+        "🌟 *Surprising Fact*\nPenguins propose karte hain by giving pebbles! 🐧💍",
+        "🌟 *Beautiful Fact*\nButterflies taste with their feet! 🦋👣",
+        "🌟 *Amazing Fact*\nShark dinosaurs se bhi pehle exist karte the! 🦈🦕",
+        "🌟 *Crazy Fact*\nEk teaspoon neutron star ka weight 6 billion tons hoga! ⭐",
+        "🌟 *Interesting Fact*\nKoala fingerprints humans se identical hote hain! 🐨👆",
+        "🌟 *Fun Fact*\nCats 70% of their life sleeping mein spend karte hain! 😺😴",
+        "🌟 *Cool Fact*\nWater bear (tardigrade) space mein survive kar sakta hai! 🐻",
+        "🌟 *Awesome Fact*\nHummingbird backwards fly kar sakta hai! 🐦✨"
+    ]
+    
+    await update.effective_message.reply_text(random.choice(facts), parse_mode=ParseMode.MARKDOWN)
+
+
+# ========================= ADMIN MODERATION COMMANDS ========================= #
+
+async def _check_bot_and_user_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> tuple[bool, str]:
+    """Check if bot and user are both admins. Returns (is_valid, error_message)"""
+    
+    # Must be in a group
+    if update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        return False, "❌ Ye command sirf groups mein kaam karta hai!"
+    
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    bot_id = context.bot.id
+    
+    try:
+        # Check if user is admin
+        user_member = await context.bot.get_chat_member(chat_id, user_id)
+        if user_member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
+            return False, "❌ Sirf admins hi ye command use kar sakte hain! 😊"
+        
+        # Check if bot is admin
+        bot_member = await context.bot.get_chat_member(chat_id, bot_id)
+        if bot_member.status not in [ChatMemberStatus.ADMINISTRATOR]:
+            return False, "❌ Mujhe pehle admin banao, phir main help kar sakti hoon! 😅"
+        
+        return True, ""
+    
+    except Exception as e:
+        logger.error(f"Admin check error: {e}")
+        return False, "❌ Permission check mein problem aa gayi! 😅"
+
+
+async def del_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /del command - Delete replied message"""
+    await _register_user(update.effective_user.id)
+    
+    # Check if command is a reply
+    if not update.message.reply_to_message:
+        await update.effective_message.reply_text(
+            "❌ Kisi message ko reply karke /del use karo! 😊"
+        )
+        return
+    
+    # Check permissions
+    is_valid, error_msg = await _check_bot_and_user_admin(update, context)
+    if not is_valid:
+        await update.effective_message.reply_text(error_msg)
+        return
+    
+    try:
+        # Delete the replied message
+        await update.message.reply_to_message.delete()
+        
+        # Delete the command message too
+        await update.message.delete()
+        
+        logger.info(f"Message deleted by {update.effective_user.first_name}")
+    
+    except Exception as e:
+        logger.error(f"Delete error: {e}")
+        await update.effective_message.reply_text(
+            "❌ Message delete nahi ho paya! Shayad bahut purana hai 😅"
+        )
+
+
+async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /ban command - Ban replied user"""
+    await _register_user(update.effective_user.id)
+    
+    # Check if command is a reply
+    if not update.message.reply_to_message:
+        await update.effective_message.reply_text(
+            "❌ Kisi user ke message ko reply karke /ban use karo! 😊"
+        )
+        return
+    
+    # Check permissions
+    is_valid, error_msg = await _check_bot_and_user_admin(update, context)
+    if not is_valid:
+        await update.effective_message.reply_text(error_msg)
+        return
+    
+    target_user = update.message.reply_to_message.from_user
+    
+    # Don't ban admins
+    try:
+        target_member = await context.bot.get_chat_member(update.effective_chat.id, target_user.id)
+        if target_member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
+            await update.effective_message.reply_text(
+                "❌ Admin ko ban nahi kar sakte! 😅"
+            )
+            return
+    except:
+        pass
+    
+    try:
+        # Ban the user
+        await context.bot.ban_chat_member(
+            chat_id=update.effective_chat.id,
+            user_id=target_user.id
+        )
+        
+        user_name = target_user.first_name or "User"
+        await update.effective_message.reply_text(
+            f"✅ {user_name} ko ban kar diya! 🚫\n"
+            "Unban karne ke liye /unban use karo."
+        )
+        
+        logger.info(f"User {target_user.id} banned by {update.effective_user.first_name}")
+    
+    except Exception as e:
+        logger.error(f"Ban error: {e}")
+        await update.effective_message.reply_text(
+            "❌ Ban nahi ho paya! Permission issue ho sakta hai 😅"
+        )
+
+
+async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /unban command - Unban user"""
+    await _register_user(update.effective_user.id)
+    
+    # Check permissions
+    is_valid, error_msg = await _check_bot_and_user_admin(update, context)
+    if not is_valid:
+        await update.effective_message.reply_text(error_msg)
+        return
+    
+    # Get user ID from reply or argument
+    target_user_id = None
+    user_name = "User"
+    
+    if update.message.reply_to_message:
+        target_user_id = update.message.reply_to_message.from_user.id
+        user_name = update.message.reply_to_message.from_user.first_name or "User"
+    elif context.args:
+        try:
+            # Try to parse as user ID
+            target_user_id = int(context.args[0])
+        except:
+            await update.effective_message.reply_text(
+                "❌ Valid user ID do! 😊\n"
+                "Format: /unban <user_id> ya kisi message ko reply karo"
+            )
+            return
+    else:
+        await update.effective_message.reply_text(
+            "❌ Kisi banned user ke message ko reply karo ya user ID do! 😊\n"
+            "Format: /unban <user_id>"
+        )
+        return
+    
+    try:
+        # Unban the user
+        await context.bot.unban_chat_member(
+            chat_id=update.effective_chat.id,
+            user_id=target_user_id,
+            only_if_banned=True
+        )
+        
+        await update.effective_message.reply_text(
+            f"✅ {user_name} ko unban kar diya! ✨\n"
+            "Ab vo dobara join kar sakte hain."
+        )
+        
+        logger.info(f"User {target_user_id} unbanned by {update.effective_user.first_name}")
+    
+    except Exception as e:
+        logger.error(f"Unban error: {e}")
+        await update.effective_message.reply_text(
+            "❌ Unban nahi ho paya! User pehle se unbanned ho sakta hai 😅"
+        )
+
+
+async def mute_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /mute command - Mute replied user"""
+    await _register_user(update.effective_user.id)
+    
+    # Check if command is a reply
+    if not update.message.reply_to_message:
+        await update.effective_message.reply_text(
+            "❌ Kisi user ke message ko reply karke /mute use karo! 😊\n"
+            "Format: /mute <time> (e.g., 10m, 1h, 1d)"
+        )
+        return
+    
+    # Check permissions
+    is_valid, error_msg = await _check_bot_and_user_admin(update, context)
+    if not is_valid:
+        await update.effective_message.reply_text(error_msg)
+        return
+    
+    target_user = update.message.reply_to_message.from_user
+    
+    # Don't mute admins
+    try:
+        target_member = await context.bot.get_chat_member(update.effective_chat.id, target_user.id)
+        if target_member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
+            await update.effective_message.reply_text(
+                "❌ Admin ko mute nahi kar sakte! 😅"
+            )
+            return
+    except:
+        pass
+    
+    # Parse mute duration
+    duration_seconds = 300  # Default 5 minutes
+    duration_text = "5 minutes"
+    
+    if context.args:
+        duration_arg = context.args[0].lower()
+        try:
+            if duration_arg.endswith('m'):
+                minutes = int(duration_arg[:-1])
+                duration_seconds = minutes * 60
+                duration_text = f"{minutes} minute{'s' if minutes > 1 else ''}"
+            elif duration_arg.endswith('h'):
+                hours = int(duration_arg[:-1])
+                duration_seconds = hours * 3600
+                duration_text = f"{hours} hour{'s' if hours > 1 else ''}"
+            elif duration_arg.endswith('d'):
+                days = int(duration_arg[:-1])
+                duration_seconds = days * 86400
+                duration_text = f"{days} day{'s' if days > 1 else ''}"
+        except:
+            pass
+    
+    try:
+        from datetime import datetime, timedelta
+        
+        # Mute the user (restrict permissions)
+        until_date = datetime.now() + timedelta(seconds=duration_seconds)
+        
+        await context.bot.restrict_chat_member(
+            chat_id=update.effective_chat.id,
+            user_id=target_user.id,
+            permissions=ChatPermissions(can_send_messages=False),
+            until_date=until_date
+        )
+        
+        user_name = target_user.first_name or "User"
+        await update.effective_message.reply_text(
+            f"🔇 {user_name} ko {duration_text} ke liye mute kar diya! 🤐\n"
+            "Unmute karne ke liye /unmute use karo."
+        )
+        
+        logger.info(f"User {target_user.id} muted for {duration_text} by {update.effective_user.first_name}")
+    
+    except Exception as e:
+        logger.error(f"Mute error: {e}")
+        await update.effective_message.reply_text(
+            "❌ Mute nahi ho paya! Permission issue ho sakta hai 😅"
+        )
+
+
+async def unmute_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /unmute command - Unmute replied user"""
+    await _register_user(update.effective_user.id)
+    
+    # Check if command is a reply
+    if not update.message.reply_to_message:
+        await update.effective_message.reply_text(
+            "❌ Kisi muted user ke message ko reply karke /unmute use karo! 😊"
+        )
+        return
+    
+    # Check permissions
+    is_valid, error_msg = await _check_bot_and_user_admin(update, context)
+    if not is_valid:
+        await update.effective_message.reply_text(error_msg)
+        return
+    
+    target_user = update.message.reply_to_message.from_user
+    
+    try:
+        # Unmute the user (restore permissions)
+        await context.bot.restrict_chat_member(
+            chat_id=update.effective_chat.id,
+            user_id=target_user.id,
+            permissions=ChatPermissions(
+                can_send_messages=True,
+                can_send_media_messages=True,
+                can_send_polls=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True,
+                can_change_info=False,
+                can_invite_users=True,
+                can_pin_messages=False
+            )
+        )
+        
+        user_name = target_user.first_name or "User"
+        await update.effective_message.reply_text(
+            f"🔊 {user_name} ko unmute kar diya! ✨\n"
+            "Ab vo baat kar sakte hain."
+        )
+        
+        logger.info(f"User {target_user.id} unmuted by {update.effective_user.first_name}")
+    
+    except Exception as e:
+        logger.error(f"Unmute error: {e}")
+        await update.effective_message.reply_text(
+            "❌ Unmute nahi ho paya! User pehle se unmuted ho sakta hai 😅"
+        )
+
+
+async def promote_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /promote command - Promote replied user to admin"""
+    await _register_user(update.effective_user.id)
+    
+    # Check if command is a reply
+    if not update.message.reply_to_message:
+        await update.effective_message.reply_text(
+            "❌ Kisi user ke message ko reply karke /promote use karo! 😊"
+        )
+        return
+    
+    # Check permissions (only creator or check if user is owner)
+    is_valid, error_msg = await _check_bot_and_user_admin(update, context)
+    if not is_valid:
+        await update.effective_message.reply_text(error_msg)
+        return
+    
+    target_user = update.message.reply_to_message.from_user
+    
+    try:
+        # Promote user to admin with basic permissions
+        await context.bot.promote_chat_member(
+            chat_id=update.effective_chat.id,
+            user_id=target_user.id,
+            can_change_info=False,
+            can_delete_messages=True,
+            can_invite_users=True,
+            can_restrict_members=True,
+            can_pin_messages=True,
+            can_manage_chat=False
+        )
+        
+        user_name = target_user.first_name or "User"
+        await update.effective_message.reply_text(
+            f"⭐ {user_name} ko admin bana diya! 🎉\n"
+            "Congratulations! 👏"
+        )
+        
+        logger.info(f"User {target_user.id} promoted by {update.effective_user.first_name}")
+    
+    except Exception as e:
+        logger.error(f"Promote error: {e}")
+        await update.effective_message.reply_text(
+            "❌ Promote nahi ho paya! Permission issue ho sakta hai 😅\n"
+            "Sirf group creator hi promote kar sakta hai!"
+        )
+
+
+async def demote_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /demote command - Remove admin rights"""
+    await _register_user(update.effective_user.id)
+    
+    # Check if command is a reply
+    if not update.message.reply_to_message:
+        await update.effective_message.reply_text(
+            "❌ Kisi admin ke message ko reply karke /demote use karo! 😊"
+        )
+        return
+    
+    # Check permissions
+    is_valid, error_msg = await _check_bot_and_user_admin(update, context)
+    if not is_valid:
+        await update.effective_message.reply_text(error_msg)
+        return
+    
+    target_user = update.message.reply_to_message.from_user
+    
+    # Don't demote creator
+    try:
+        target_member = await context.bot.get_chat_member(update.effective_chat.id, target_user.id)
+        if target_member.status == ChatMemberStatus.CREATOR:
+            await update.effective_message.reply_text(
+                "❌ Creator ko demote nahi kar sakte! 😅"
+            )
+            return
+    except:
+        pass
+    
+    try:
+        # Demote user (remove admin rights)
+        await context.bot.promote_chat_member(
+            chat_id=update.effective_chat.id,
+            user_id=target_user.id,
+            can_change_info=False,
+            can_delete_messages=False,
+            can_invite_users=False,
+            can_restrict_members=False,
+            can_pin_messages=False,
+            can_manage_chat=False
+        )
+        
+        user_name = target_user.first_name or "User"
+        await update.effective_message.reply_text(
+            f"⬇️ {user_name} ko demote kar diya! 😊\n"
+            "Admin rights remove ho gaye."
+        )
+        
+        logger.info(f"User {target_user.id} demoted by {update.effective_user.first_name}")
+    
+    except Exception as e:
+        logger.error(f"Demote error: {e}")
+        await update.effective_message.reply_text(
+            "❌ Demote nahi ho paya! Permission issue ho sakta hai 😅\n"
+            "Sirf group creator hi demote kar sakta hai!"
+        )
+
+
+async def pin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /pin command - Pin replied message"""
+    await _register_user(update.effective_user.id)
+    
+    # Check if command is a reply
+    if not update.message.reply_to_message:
+        await update.effective_message.reply_text(
+            "❌ Kisi message ko reply karke /pin use karo! 😊"
+        )
+        return
+    
+    # Check permissions
+    is_valid, error_msg = await _check_bot_and_user_admin(update, context)
+    if not is_valid:
+        await update.effective_message.reply_text(error_msg)
+        return
+    
+    try:
+        # Pin the message
+        await context.bot.pin_chat_message(
+            chat_id=update.effective_chat.id,
+            message_id=update.message.reply_to_message.message_id,
+            disable_notification=True  # Don't send notification to all members
+        )
+        
+        await update.effective_message.reply_text(
+            "📌 Message pin kar diya! ✨\n"
+            "Unpin karne ke liye /unpin use karo."
+        )
+        
+        logger.info(f"Message pinned by {update.effective_user.first_name}")
+    
+    except Exception as e:
+        logger.error(f"Pin error: {e}")
+        await update.effective_message.reply_text(
+            "❌ Pin nahi ho paya! Permission issue ho sakta hai 😅"
+        )
+
+
+async def unpin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /unpin command - Unpin message"""
+    await _register_user(update.effective_user.id)
+    
+    # Check permissions
+    is_valid, error_msg = await _check_bot_and_user_admin(update, context)
+    if not is_valid:
+        await update.effective_message.reply_text(error_msg)
+        return
+    
+    try:
+        # If replying to a message, unpin that specific message
+        if update.message.reply_to_message:
+            await context.bot.unpin_chat_message(
+                chat_id=update.effective_chat.id,
+                message_id=update.message.reply_to_message.message_id
+            )
+            await update.effective_message.reply_text(
+                "📍 Message unpin kar diya! ✨"
+            )
+        else:
+            # Unpin all messages
+            await context.bot.unpin_all_chat_messages(
+                chat_id=update.effective_chat.id
+            )
+            await update.effective_message.reply_text(
+                "📍 Saare pinned messages unpin kar diye! ✨"
+            )
+        
+        logger.info(f"Message(s) unpinned by {update.effective_user.first_name}")
+    
+    except Exception as e:
+        logger.error(f"Unpin error: {e}")
+        await update.effective_message.reply_text(
+            "❌ Unpin nahi ho paya! Koi pinned message nahi hai shayad 😅"
+        )
+
+
+async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /admin or /adminhelp command - Show admin commands (admin only)"""
+    await _register_user(update.effective_user.id)
+    
+    # Must be in a group
+    if update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        await update.effective_message.reply_text(
+            "❌ Ye command sirf groups mein kaam karta hai! 😊"
+        )
+        return
+    
+    # Check if user is admin
+    try:
+        user_member = await context.bot.get_chat_member(
+            update.effective_chat.id,
+            update.effective_user.id
+        )
+        
+        if user_member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
+            await update.effective_message.reply_text(
+                "Sirf admins is command ko use kar sakte hain 🙂"
+            )
+            return
+    except Exception as e:
+        logger.error(f"Admin check error: {e}")
+        await update.effective_message.reply_text(
+            "❌ Permission check mein problem aa gayi! 😅"
+        )
+        return
+    
+    # User is admin, show admin commands
+    admin_help_text = (
+        "👮‍♂️ *Admin Commands* - Baby ❤️\n\n"
+        
+        "🗑️ /del\n"
+        "→ Reply karke message delete karo\n\n"
+        
+        "🚫 /ban\n"
+        "→ Reply karke user ban karo\n\n"
+        
+        "🔓 /unban <user_id>\n"
+        "→ Reply ya ID se unban karo\n\n"
+        
+        "🔇 /mute <time>\n"
+        "→ Reply karke mute karo (10m, 1h, 1d)\n\n"
+        
+        "🔊 /unmute\n"
+        "→ Reply karke mute hatao\n\n"
+        
+        "👑 /promote\n"
+        "→ Reply karke admin banao\n\n"
+        
+        "👤 /demote\n"
+        "→ Reply karke admin hatao\n\n"
+        
+        "📌 /pin\n"
+        "→ Reply karke message pin karo\n\n"
+        
+        "📍 /unpin\n"
+        "→ Reply karke unpin karo (ya sare pins hatao)\n\n"
+        
+        "⚠️ *Note:* Bot ko admin banana zaruri hai!\n"
+        "Admins ko ban/mute nahi kar sakte 😊"
+    )
+    
+    await update.effective_message.reply_text(
+        admin_help_text,
+        parse_mode=ParseMode.MARKDOWN
+    )
+    
+    logger.info(f"Admin help shown to {update.effective_user.first_name}")
+
+
 # ========================= CALLBACK HANDLERS ========================= #
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1361,6 +2719,16 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
     user_message = update.message.text
     user_name = update.effective_user.first_name or "Bhai"
     
+    # Check for "play <song name>" pattern
+    message_lower = user_message.lower().strip()
+    if message_lower.startswith("play ") and len(message_lower) > 5:
+        song_name = user_message[5:].strip()  # Extract song name after "play "
+        if song_name:
+            # Simulate /song command by setting context.args and calling song_command
+            context.args = song_name.split()
+            await song_command(update, context)
+            return
+    
     logger.info(f"Private message from {user_name}: {user_message}")
     
     # Detect language preference from message
@@ -1397,29 +2765,22 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
 async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle group messages - ONLY reply when specifically triggered"""
     try:
-        # === IMMEDIATE DEBUG OUTPUT ===
-        print("\n" + "="*60)
-        print("🔥 GROUP MESSAGE RECEIVED!")
-        print("="*60)
-        
         if not update.message:
-            print("❌ No message object")
             return
             
         if not update.message.text:
-            print("❌ No text in message")
             return
         
         message_text = update.message.text
         user_name = update.effective_user.first_name or "Unknown"
         chat_title = update.effective_chat.title or "Unknown Group"
         
-        print(f"👤 From: {user_name}")
-        print(f"💬 Group: {chat_title}")
-        print(f"📝 Message: {message_text}")
-        print("="*60 + "\n")
+        logger.debug(f"GROUP: [{chat_title}] {user_name}: {message_text[:50]}")
         
-        logger.info(f"🔥 GROUP: [{chat_title}] {user_name}: {message_text[:50]}")
+        # Check for spam FIRST (before any processing)
+        spam_handled = await _check_spam(update, context)
+        if spam_handled:
+            return  # Spam detected and handled, don't process further
         
         # Register user
         user_id = update.effective_user.id
@@ -1430,6 +2791,15 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         await _register_group(group_id)
         
         message_text_lower = message_text.lower().strip()
+        
+        # Check for "play <song name>" pattern
+        if message_text_lower.startswith("play ") and len(message_text_lower) > 5:
+            song_name = message_text[5:].strip()  # Extract song name after "play "
+            if song_name:
+                # Simulate /song command by setting context.args and calling song_command
+                context.args = song_name.split()
+                await song_command(update, context)
+                return
         
         # Track active user
         if update.effective_user and update.effective_chat:
@@ -1449,40 +2819,48 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             if update.message.reply_to_message.from_user:
                 if update.message.reply_to_message.from_user.is_bot:
                     should_respond = True
-                    print("✅ TRIGGER: Reply to bot")
                     logger.info("✅ Trigger: Reply to bot")
         
-        # Trigger 2: Bot mentioned
-        if "@animxclanbot" in message_text_lower:
+        # Trigger 2: Bot mentioned (@AnimxClanBot or @animxclanbot)
+        if "@animxclanbot" in message_text_lower or BOT_USERNAME.lower() in message_text_lower:
             should_respond = True
             bot_mentioned = True
-            print("✅ TRIGGER: Bot mentioned")
             logger.info("✅ Trigger: Bot mentioned")
         
         # Trigger 3: Contains "baby"
         if "baby" in message_text_lower:
             should_respond = True
-            print("✅ TRIGGER: Word 'baby'")
             logger.info("✅ Trigger: Word 'baby'")
         
-        # Trigger 4: Basic greetings (must be standalone or at start/end)
-        greetings = ["hello", "hi", "hii", "hey", "gm", "good morning", "gn", "good night", 
+        # Trigger 4: Basic greetings
+        # These are exact word matches (case-insensitive)
+        greetings = ["hi", "hii", "hello", "hey", "gm", "good morning", "gn", "good night", 
                      "bye", "good bye", "goodbye", "morning", "night"]
         
+        # Split message into words and check for exact matches
         words = message_text_lower.split()
-        if any(word in greetings for word in words):
-            should_respond = True
-            print("✅ TRIGGER: Greeting detected")
-            logger.info("✅ Trigger: Greeting")
+        for greeting in greetings:
+            # Check if greeting is in the message as a standalone word or phrase
+            if greeting in message_text_lower:
+                # For multi-word greetings like "good morning"
+                if " " in greeting:
+                    if greeting in message_text_lower:
+                        should_respond = True
+                        logger.info(f"✅ Trigger: Greeting '{greeting}'")
+                        break
+                # For single-word greetings
+                else:
+                    if greeting in words:
+                        should_respond = True
+                        logger.info(f"✅ Trigger: Greeting '{greeting}'")
+                        break
         
         # If NO trigger, IGNORE silently
         if not should_respond:
-            print("⏭️  NO TRIGGER - Ignoring message")
-            logger.info("⏭️ No trigger - ignoring")
+            logger.debug("⏭️ No trigger - ignoring message")
             return
         
-        print(f"🚀 Will respond to {user_name}")
-        logger.info(f"✅ Will respond to {user_name}")
+        logger.info(f"✅ Responding to {user_name} in {chat_title}")
         
         # Detect language preference from message
         if "english me bolo" in message_text_lower or "speak in english" in message_text_lower:
@@ -1611,6 +2989,9 @@ def main() -> None:
     # Register command handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("admin", admin_command))
+    application.add_handler(CommandHandler("adminhelp", admin_command))
+    application.add_handler(CommandHandler("stop", stop_command))
     
     # Song download commands
     application.add_handler(CommandHandler("song", song_command))
@@ -1625,15 +3006,61 @@ def main() -> None:
     
     # Greeting commands
     application.add_handler(CommandHandler("gm", gm_command))
+    application.add_handler(CommandHandler("ga", ga_command))
+    application.add_handler(CommandHandler("ge", ge_command))
     application.add_handler(CommandHandler("gn", gn_command))
     application.add_handler(CommandHandler("bye", bye_command))
     application.add_handler(CommandHandler("welcome", welcome_command))
     application.add_handler(CommandHandler("thanks", thanks_command))
+    application.add_handler(CommandHandler("thankyou", thankyou_command))
     application.add_handler(CommandHandler("sorry", sorry_command))
     application.add_handler(CommandHandler("mood", mood_command))
     
+    # Conversation commands
+    application.add_handler(CommandHandler("chat", chat_command))
+    application.add_handler(CommandHandler("ask", ask_command))
+    application.add_handler(CommandHandler("about", about_command))
+    application.add_handler(CommandHandler("privacy", privacy_command))
+    
+    # Emotional support commands
+    application.add_handler(CommandHandler("sad", sad_command))
+    application.add_handler(CommandHandler("happy", happy_command))
+    application.add_handler(CommandHandler("angry", angry_command))
+    application.add_handler(CommandHandler("motivate", motivate_command))
+    application.add_handler(CommandHandler("howareyou", howareyou_command))
+    application.add_handler(CommandHandler("missyou", missyou_command))
+    application.add_handler(CommandHandler("hug", hug_command))
+    
+    # Productivity & wellness commands
+    application.add_handler(CommandHandler("tip", tip_command))
+    application.add_handler(CommandHandler("confidence", confidence_command))
+    application.add_handler(CommandHandler("focus", focus_command))
+    application.add_handler(CommandHandler("sleep", sleep_command))
+    application.add_handler(CommandHandler("lifeline", lifeline_command))
+    
+    # Fun commands
+    application.add_handler(CommandHandler("joke", joke_command))
+    application.add_handler(CommandHandler("roast", roast_command))
+    application.add_handler(CommandHandler("truth", truth_command))
+    application.add_handler(CommandHandler("dare", dare_command))
+    application.add_handler(CommandHandler("fact", fact_command))
+    
+    # Admin moderation commands
+    application.add_handler(CommandHandler("del", del_command))
+    application.add_handler(CommandHandler("ban", ban_command))
+    application.add_handler(CommandHandler("unban", unban_command))
+    application.add_handler(CommandHandler("mute", mute_command))
+    application.add_handler(CommandHandler("unmute", unmute_command))
+    application.add_handler(CommandHandler("promote", promote_command))
+    application.add_handler(CommandHandler("demote", demote_command))
+    application.add_handler(CommandHandler("pin", pin_command))
+    application.add_handler(CommandHandler("unpin", unpin_command))
+    
     # Register callback handler for inline buttons
     application.add_handler(CallbackQueryHandler(button_callback))
+    
+    # Register chat member handler for group tracking
+    application.add_handler(ChatMemberHandler(my_chat_member_handler, ChatMemberHandler.MY_CHAT_MEMBER))
     
     # Register message handlers
     # Private messages (all text messages in private chat)
