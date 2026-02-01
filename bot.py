@@ -83,30 +83,36 @@ def _is_admin_or_owner(user_id: int, chat_id: int) -> bool:
 
 # ========================= BROADCAST SYSTEM ========================= #
 
-# User registration storage
+# Enhanced user database structure
 USERS_DB_FILE: Final[Path] = Path("users_database.json")
 
-def _load_registered_users() -> Set[int]:
-    """Load registered user IDs from JSON file"""
+def _load_users_database() -> Dict[int, Dict[str, Any]]:
+    """Load detailed user database from JSON file
+    Structure: {user_id: {username, first_name, last_seen, join_date}}
+    """
     try:
         if USERS_DB_FILE.exists():
             with open(USERS_DB_FILE, "r") as f:
                 data = json.load(f)
-                return set(data.get("user_ids", []))
+                # Convert string keys back to int
+                return {int(k): v for k, v in data.get("users", {}).items()}
     except Exception as e:
         logger.warning(f"Could not load users database: {e}")
-    return set()
+    return {}
 
-def _save_registered_users(user_ids: Set[int]) -> None:
-    """Save registered user IDs to JSON file"""
+def _save_users_database(users_data: Dict[int, Dict[str, Any]]) -> None:
+    """Save detailed user database to JSON file"""
     try:
         with open(USERS_DB_FILE, "w") as f:
-            json.dump({"user_ids": list(user_ids)}, f, indent=2)
+            json.dump({"users": users_data, "total": len(users_data)}, f, indent=2)
     except Exception as e:
         logger.error(f"Could not save users database: {e}")
 
-# In-memory set of registered users
-REGISTERED_USERS: Set[int] = _load_registered_users()
+# In-memory detailed user database
+USERS_DATABASE: Dict[int, Dict[str, Any]] = _load_users_database()
+
+# Legacy set for backward compatibility
+REGISTERED_USERS: Set[int] = set(USERS_DATABASE.keys())
 
 # ========================= OPT-OUT SYSTEM ========================= #
 
@@ -141,41 +147,99 @@ LANGUAGE_PREFERENCES: Dict[int, str] = {}
 
 GROUPS_DB_FILE: Final[Path] = Path("groups_database.json")
 
-def _load_registered_groups() -> Set[int]:
-    """Load registered group IDs from JSON file"""
+def _load_groups_database() -> Dict[int, Dict[str, Any]]:
+    """Load detailed group database from JSON file
+    Structure: {group_id: {title, type, member_count, added_date, last_active}}
+    """
     try:
         if GROUPS_DB_FILE.exists():
             with open(GROUPS_DB_FILE, "r") as f:
                 data = json.load(f)
-                return set(data.get("group_ids", []))
+                # Convert string keys back to int
+                return {int(k): v for k, v in data.get("groups", {}).items()}
     except Exception as e:
         logger.warning(f"Could not load groups database: {e}")
-    return set()
+    return {}
 
-def _save_registered_groups(group_ids: Set[int]) -> None:
-    """Save registered group IDs to JSON file"""
+def _save_groups_database(groups_data: Dict[int, Dict[str, Any]]) -> None:
+    """Save detailed group database to JSON file"""
     try:
         with open(GROUPS_DB_FILE, "w") as f:
-            json.dump({"group_ids": list(group_ids)}, f, indent=2)
+            json.dump({"groups": groups_data, "total": len(groups_data)}, f, indent=2)
     except Exception as e:
         logger.error(f"Could not save groups database: {e}")
 
-# In-memory set of registered groups
-REGISTERED_GROUPS: Set[int] = _load_registered_groups()
+# In-memory detailed group database
+GROUPS_DATABASE: Dict[int, Dict[str, Any]] = _load_groups_database()
 
-async def _register_group(chat_id: int) -> None:
-    """Register a group if not already registered"""
-    if chat_id not in REGISTERED_GROUPS:
+# Legacy set for backward compatibility
+REGISTERED_GROUPS: Set[int] = set(GROUPS_DATABASE.keys())
+
+async def _register_group(chat_id: int, chat: Optional[Chat] = None) -> None:
+    """Register a group with detailed information"""
+    current_time = time.time()
+    
+    if chat_id not in GROUPS_DATABASE:
+        # New group
+        GROUPS_DATABASE[chat_id] = {
+            "title": chat.title if chat else "Unknown Group",
+            "type": chat.type if chat else "group",
+            "username": chat.username if chat and chat.username else None,
+            "added_date": current_time,
+            "last_active": current_time,
+            "member_count": 0
+        }
         REGISTERED_GROUPS.add(chat_id)
-        _save_registered_groups(REGISTERED_GROUPS)
-        logger.info(f"✅ Registered group: {chat_id}")
+        logger.info(f"✅ New group registered: {GROUPS_DATABASE[chat_id]['title']} ({chat_id})")
+    else:
+        # Update existing group
+        GROUPS_DATABASE[chat_id]["last_active"] = current_time
+        if chat and chat.title:
+            GROUPS_DATABASE[chat_id]["title"] = chat.title
+    
+    _save_groups_database(GROUPS_DATABASE)
 
-async def _register_user(user_id: int) -> None:
-    """Register a user if not already registered"""
-    if user_id not in REGISTERED_USERS:
+async def _register_user(user_id: int, username: Optional[str] = None, first_name: Optional[str] = None) -> None:
+    """Register a user with detailed information"""
+    current_time = time.time()
+    
+    if user_id not in USERS_DATABASE:
+        # New user
+        USERS_DATABASE[user_id] = {
+            "user_id": user_id,
+            "username": username or "None",
+            "first_name": first_name or "Unknown",
+            "join_date": current_time,
+            "last_seen": current_time,
+            "message_count": 0
+        }
         REGISTERED_USERS.add(user_id)
-        _save_registered_users(REGISTERED_USERS)
-        logger.info(f"📝 New user registered: {user_id}. Total users: {len(REGISTERED_USERS)}")
+        logger.info(f"📝 New user registered: @{username or 'None'} ({first_name or 'Unknown'}) - ID: {user_id}")
+        logger.info(f"📊 Total users: {len(USERS_DATABASE)}")
+    else:
+        # Update existing user
+        USERS_DATABASE[user_id]["last_seen"] = current_time
+        USERS_DATABASE[user_id]["message_count"] = USERS_DATABASE[user_id].get("message_count", 0) + 1
+        if username:
+            USERS_DATABASE[user_id]["username"] = username
+        if first_name:
+            USERS_DATABASE[user_id]["first_name"] = first_name
+    
+    _save_users_database(USERS_DATABASE)
+
+async def _register_user_from_update(update: Update) -> None:
+    """Helper to register user from Update object"""
+    if update.effective_user:
+        await _register_user(
+            update.effective_user.id,
+            update.effective_user.username,
+            update.effective_user.first_name
+        )
+
+async def _register_group_from_update(update: Update) -> None:
+    """Helper to register group from Update object"""
+    if update.effective_chat and update.effective_chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        await _register_group(update.effective_chat.id, update.effective_chat)
 
 async def _check_admin_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """Verify if user is admin in the group"""
@@ -794,7 +858,7 @@ async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_T
             # Bot was added to group
             if new_status in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR] and \
                old_status not in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR]:
-                await _register_group(chat.id)
+                await _register_group(chat.id, chat)
                 logger.info(f"✅ Bot added to group: {chat.title} ({chat.id})")
                 
                 # Send welcome message
@@ -826,9 +890,10 @@ async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start command with inline buttons"""
-    # Register user
+    # Register user with full details
+    await _register_user_from_update(update)
+    
     user_id = update.effective_user.id
-    await _register_user(user_id)
     
     # Remove from opted-out list if they were opted out
     if user_id in OPTED_OUT_USERS:
@@ -906,6 +971,183 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "✅ Done! Ab tumhe broadcasts nahi aayenge.\n\n"
         "Agar kabhi wapas chahiye toh /start karke dobara activate kar sakte ho! 💕"
     )
+
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /stats command - Show bot statistics (admin only)"""
+    user_id = update.effective_user.id
+    
+    # Only admin can view stats
+    if user_id != ADMIN_ID:
+        await update.effective_message.reply_text(
+            "🔐 Sirf admin (bot owner) ye command use kar sakte hain! 😊"
+        )
+        return
+    
+    await _register_user_from_update(update)
+    
+    # Calculate statistics
+    total_users = len(USERS_DATABASE)
+    total_groups = len(GROUPS_DATABASE)
+    opted_out_count = len(OPTED_OUT_USERS)
+    active_users = total_users - opted_out_count
+    
+    # Get recent users (last 24 hours)
+    current_time = time.time()
+    recent_users = sum(1 for user in USERS_DATABASE.values() 
+                       if current_time - user.get("last_seen", 0) < 86400)
+    
+    # Group breakdown
+    group_types = {}
+    for group in GROUPS_DATABASE.values():
+        group_type = group.get("type", "unknown")
+        group_types[group_type] = group_types.get(group_type, 0) + 1
+    
+    # Create stats message
+    stats_text = (
+        "📊 *Bot Statistics* - Baby ❤️\n\n"
+        
+        "👥 *Users:*\n"
+        f"├ Total Users: {total_users}\n"
+        f"├ Active: {active_users}\n"
+        f"├ Opted Out: {opted_out_count}\n"
+        f"└ Active (24h): {recent_users}\n\n"
+        
+        "📢 *Groups:*\n"
+        f"└ Total Groups: {total_groups}\n"
+    )
+    
+    # Add group type breakdown if available
+    if group_types:
+        stats_text += "\n*Group Types:*\n"
+        for gtype, count in group_types.items():
+            stats_text += f"├ {gtype}: {count}\n"
+    
+    stats_text += f"\n🕐 *Uptime:* Bot is running\n"
+    stats_text += f"📝 *Version:* 2.0 (Enhanced Tracking)\n"
+    
+    await update.effective_message.reply_text(
+        stats_text,
+        parse_mode=ParseMode.MARKDOWN
+    )
+    
+    logger.info(f"Stats viewed by admin {user_id}")
+
+
+async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /users command - Show user list (admin only)"""
+    user_id = update.effective_user.id
+    
+    # Only admin can view users
+    if user_id != ADMIN_ID:
+        await update.effective_message.reply_text(
+            "🔐 Sirf admin ye command use kar sakte hain! 😊"
+        )
+        return
+    
+    await _register_user_from_update(update)
+    
+    # Get users sorted by last seen
+    sorted_users = sorted(
+        USERS_DATABASE.items(),
+        key=lambda x: x[1].get("last_seen", 0),
+        reverse=True
+    )
+    
+    # Show first 20 users
+    users_text = "👥 *Registered Users* (Recent 20):\n\n"
+    
+    for idx, (uid, user_data) in enumerate(sorted_users[:20], 1):
+        username = user_data.get("username", "None")
+        first_name = user_data.get("first_name", "Unknown")
+        msg_count = user_data.get("message_count", 0)
+        
+        # Format last seen
+        last_seen = user_data.get("last_seen", 0)
+        time_diff = time.time() - last_seen
+        if time_diff < 300:  # 5 minutes
+            last_seen_str = "Just now"
+        elif time_diff < 3600:  # 1 hour
+            last_seen_str = f"{int(time_diff/60)}m ago"
+        elif time_diff < 86400:  # 1 day
+            last_seen_str = f"{int(time_diff/3600)}h ago"
+        else:
+            last_seen_str = f"{int(time_diff/86400)}d ago"
+        
+        users_text += (
+            f"{idx}. *{first_name}* "
+            f"(@{username})\n"
+            f"   ID: `{uid}` | {msg_count} msgs | {last_seen_str}\n\n"
+        )
+    
+    users_text += f"📊 Total: {len(USERS_DATABASE)} users"
+    
+    await update.effective_message.reply_text(
+        users_text,
+        parse_mode=ParseMode.MARKDOWN
+    )
+    
+    logger.info(f"Users list viewed by admin {user_id}")
+
+
+async def groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /groups command - Show group list (admin only)"""
+    user_id = update.effective_user.id
+    
+    # Only admin can view groups
+    if user_id != ADMIN_ID:
+        await update.effective_message.reply_text(
+            "🔐 Sirf admin ye command use kar sakte hain! 😊"
+        )
+        return
+    
+    await _register_user_from_update(update)
+    
+    # Get groups sorted by last active
+    sorted_groups = sorted(
+        GROUPS_DATABASE.items(),
+        key=lambda x: x[1].get("last_active", 0),
+        reverse=True
+    )
+    
+    # Show all groups
+    groups_text = "📢 *Registered Groups*:\n\n"
+    
+    for idx, (gid, group_data) in enumerate(sorted_groups, 1):
+        title = group_data.get("title", "Unknown")
+        username = group_data.get("username", None)
+        
+        # Format last active
+        last_active = group_data.get("last_active", 0)
+        time_diff = time.time() - last_active
+        if time_diff < 300:  # 5 minutes
+            last_active_str = "Active now"
+        elif time_diff < 3600:  # 1 hour
+            last_active_str = f"{int(time_diff/60)}m ago"
+        elif time_diff < 86400:  # 1 day
+            last_active_str = f"{int(time_diff/3600)}h ago"
+        else:
+            last_active_str = f"{int(time_diff/86400)}d ago"
+        
+        username_str = f"@{username}" if username else "No username"
+        
+        groups_text += (
+            f"{idx}. *{title}*\n"
+            f"   {username_str} | {last_active_str}\n"
+            f"   ID: `{gid}`\n\n"
+        )
+    
+    groups_text += f"📊 Total: {len(GROUPS_DATABASE)} groups"
+    
+    await update.effective_message.reply_text(
+        groups_text,
+        parse_mode=ParseMode.MARKDOWN
+    )
+    
+    logger.info(f"Groups list viewed by admin {user_id}")
+
+
+    logger.info(f"Groups list viewed by admin {user_id}")
 
 
 # ========================= BROADCAST COMMAND ========================= #
@@ -2994,6 +3236,11 @@ def main() -> None:
     application.add_handler(CommandHandler("admin", admin_command))
     application.add_handler(CommandHandler("adminhelp", admin_command))
     application.add_handler(CommandHandler("stop", stop_command))
+    
+    # Admin analytics commands
+    application.add_handler(CommandHandler("stats", stats_command))
+    application.add_handler(CommandHandler("users", users_command))
+    application.add_handler(CommandHandler("groups", groups_command))
     
     # Song download commands
     application.add_handler(CommandHandler("song", song_command))
