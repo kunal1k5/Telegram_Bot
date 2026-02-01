@@ -1,10 +1,9 @@
 import asyncio
 import logging
 import os
-import random
 from typing import Final
 
-import telegram
+import google.generativeai as genai
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatType, ParseMode
 from telegram.ext import (
@@ -17,178 +16,155 @@ from telegram.ext import (
     filters,
 )
 
-from config import BOT_TOKEN
+# ========================= CONFIGURATION ========================= #
 
-# On Windows, make sure to use the selector event loop policy for asyncio
-if os.name == "nt":  # Windows
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+# Get credentials from environment
+BOT_TOKEN: Final[str] = os.getenv("BOT_TOKEN", "")
+GEMINI_API_KEY: Final[str] = os.getenv("GEMINI_API_KEY", "")
 
-logging.basicConfig(
-    format="[%(levelname)s] %(asctime)s - %(name)s - %(message)s",
-    level=logging.INFO,
-)
-logger = logging.getLogger("ANIMX_CLAN_CHAT")
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN environment variable not set!")
+if not GEMINI_API_KEY:
+    raise ValueError("GEMINI_API_KEY environment variable not set!")
 
-# Version: 1.0.1
-BOT_NAME: Final[str] = "ANIMX CLAN Chat Bot"
+# Configure Gemini AI
+genai.configure(api_key=GEMINI_API_KEY)
+
+# Bot info
+BOT_NAME: Final[str] = "ANIMX CLAN"
 BOT_USERNAME: Final[str] = "@AnimxClanBot"
 OWNER_USERNAME: Final[str] = "@kunal1k5"
 CHANNEL_USERNAME: Final[str] = "@AnimxClanChannel"
 
-START_TEXT: Final[str] = (
-    "🎉 *Namaste! Main ANIMX CLAN Chat Bot hoon* 🎉\n\n"
-    "Mujhe chat karna bahut pasand hai! 😊\n\n"
-    "*Main kya kar sakta hoon:*\n"
-    "💬 Tere saath friendly chat\n"
-    "😄 Jokes aur masti\n"
-    "🎯 Helpful tips\n"
-    "🌟 Sirf tera time pass!\n\n"
-    "Bas message kar, aur dekh mujhe kaisa jawaab deta hoon! 🚀"
+# Gemini AI personality system prompt
+SYSTEM_PROMPT: Final[str] = """
+You are ANIMX CLAN, a friendly Indian buddy who loves chatting on Telegram.
+
+Personality traits:
+- You speak Hinglish (mix of Hindi and English naturally)
+- You're supportive, funny when appropriate, never rude
+- You talk like a real person, not a robot or formal assistant
+- You use emojis naturally but not excessively
+- You're knowledgeable but explain things in a friendly, casual way
+- You understand Indian culture, memes, and slang
+
+Examples of your tone:
+"arey bhai! kya haal hai? 😄"
+"haan yaar, main samajh gaya! bilkul sahi bola tu"
+"thoda confusing lag raha? main explain karta hoon"
+
+Keep responses conversational, warm, and human-like.
+Never be overly formal or robotic.
+"""
+
+# Start message
+START_TEXT: Final[str] = """
+🎉 *Namaste! Main ANIMX CLAN hoon* 🎉
+
+Ek friendly bot jo tere saath chat karta hai! 😊
+
+*Main kya kar sakta hoon:*
+💬 Smart conversations (powered by AI)
+🧠 Questions ka jawab
+😄 Friendly Hinglish chat
+🎯 Help with anything you need
+
+Bas mujhe message kar, let's chat! 🚀
+"""
+
+HELP_TEXT: Final[str] = """
+📚 *ANIMX CLAN Help Guide* 📚
+
+*Commands:*
+/start - Welcome message with buttons
+/help - Show this help menu
+
+*How to use:*
+• *Private Chat:* Just message me anything!
+• *Groups:* Mention me (@AnimxClanBot) or reply to my message
+
+*Features:*
+✨ AI-powered conversations
+🗣️ Natural Hinglish responses
+🤖 Smart and friendly personality
+🔒 Safe and respectful
+
+*Tips:*
+• Be clear and friendly
+• Ask me anything!
+• Use Hinglish for best experience
+
+Made with ❤️ by ANIMX Team
+"""
+
+# Windows async fix
+if os.name == "nt":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+# Logging setup
+logging.basicConfig(
+    format="[%(levelname)s] %(asctime)s - %(name)s - %(message)s",
+    level=logging.INFO,
 )
+logger = logging.getLogger("ANIMX_CLAN_BOT")
 
-HELP_TEXT: Final[str] = (
-    "📚 *Help & Commands* 📚\n\n"
-    "`/start` - Welcome message\n"
-    "`/help` - Ye message\n"
-    "`/joke` - Funny joke sunao 😂\n\n"
-    "*Group Mein:*\n"
-    "Mujhe mention kar, main reply dunga! 👋\n"
-    "Ya bas koi message kar, main suno 👂\n\n"
-    "*Tips:*\n"
-    "• Hinglish use kar - mazaa ayega!\n"
-    "• Zada serious mat ban 😄\n"
-    "• Mujhe suggestions bhej sakte ho"
-)
+# ========================= GEMINI AI HELPER ========================= #
 
-# Hinglish responses database
-HINGLISH_RESPONSES = [
-    "Haan bhai! 😄 Kaisa chal raha? Sab theek?",
-    "Yo! Kya haal hai? 👋 Tera din kaisa hai?",
-    "Namaste! 🙏 Kya bolraha hai tu?",
-    "Arey! Tere liye time nikala? 💪 Appreciated!",
-    "Main yaha hoon! Kya help chahiye? 😊",
-    "Bhai, tu mera favorite person hai! ❤️",
-    "Kya bat hai? Kuch naya?",
-    "Haha! Main samajhta hoon 😂",
-    "Ekdum sahi kaha! 💯",
-    "Agreed, agreed! 🤝",
-]
-
-GREETING_KEYWORDS = [
-    "hi", "hello", "hey", "hii", "heya", "yo", "sup",
-    "namaste", "namaskar", "haan", "kya", "howdy"
-]
-
-ASK_KEYWORDS = [
-    "how are you", "kaisa hai", "kaisi ho", "kaise ho",
-    "how's it", "acha", "badiya", "maza", "good"
-]
-
-MOOD_RESPONSES = {
-    "happy": [
-        "Bahut accha! Main bhi khush hoon tere liye! 🎉",
-        "Yaaay! Tera khushi meri khushi! ✨",
-        "Amazing! Celebrations ho rahi? 🥳",
-    ],
-    "sad": [
-        "Arre, kya hua? Main yaha hoon support karne ke liye 💪",
-        "Dukh mat kar bhai! Sab theek ho jayega 🌟",
-        "Tension mat le! Tera friend ANIMX CLAN yaha hai 🤗",
-    ],
-    "confused": [
-        "Samajh nahi aaya? Mujhe samjha! 🤔",
-        "Confuse ho gaya? Main clear kar dunga! 📝",
-        "Kya samajhne mein problem hai? Bol!",
-    ],
-    "excited": [
-        "Bhai wow! Tera energy amazing hai! ⚡",
-        "Excited aa gya! Kya scene hai? 🔥",
-        "Arey wahh! Itni excitement se! 🚀",
-    ],
-}
-
-
-# ========================= HELPER FUNCTIONS ========================= #
-
-
-def get_mood(text: str) -> str:
-    """Detect mood from text"""
-    text_lower = text.lower()
-    
-    if any(word in text_lower for word in ["sad", "dukh", "tension", "worried", "upset", "bad", "galat"]):
-        return "sad"
-    elif any(word in text_lower for word in ["happy", "khush", "amazing", "awesome", "yay", "great", "love"]):
-        return "happy"
-    elif any(word in text_lower for word in ["confuse", "samajh", "confused", "kya", "what", "understand", "clear"]):
-        return "confused"
-    elif any(word in text_lower for word in ["excited", "wow", "wah", "omg", "amazing", "incredible", "crazy"]):
-        return "excited"
-    
-    return "neutral"
-
-
-def get_hinglish_reply(text: str) -> str:
-    """Generate human-like Hinglish reply"""
-    text_lower = text.lower()
-    mood = get_mood(text)
-    
-    # Greeting responses
-    if any(word in text_lower for word in GREETING_KEYWORDS):
-        return random.choice([
-            "Haan bhai! 😄 Kaisa chal raha?",
-            "Yo! Kya haal? Maza aa raha?",
-            "Namaste! Tera din kaisa raha?",
-            "Hey there! 👋 Sab theek?",
-        ])
-    
-    # Mood-based responses
-    if mood in MOOD_RESPONSES:
-        return random.choice(MOOD_RESPONSES[mood])
-    
-    # Ask how am I
-    if any(word in text_lower for word in ASK_KEYWORDS):
-        return random.choice([
-            "Main toh bilkul theek hoon! Tere liye better! 😊",
-            "Badiya! Tere liye hi wait kar raha tha 💪",
-            "Main ekdum fit hoon! Aur tu? 🎯",
-            "Main toh always good hoon! Tera aana he kaafi hai ❤️",
-        ])
-    
-    # Question responses
-    if "?" in text:
-        return random.choice([
-            "Accha question! 🤔 Interesting lagta hai!",
-            "Soch-samajh kar poocha hai tu! 👍",
-            "Haan, valid point! Main soch leta hoon 📝",
-            "Arey, ye toh maza aayega! Explain kar! 🚀",
-        ])
-    
-    # Default responses
-    return random.choice(HINGLISH_RESPONSES)
+def get_gemini_response(user_message: str, user_name: str = "User") -> str:
+    """
+    Get AI response from Gemini with error handling.
+    Returns a friendly response or fallback message.
+    """
+    try:
+        # Initialize Gemini model
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-flash",
+            generation_config={
+                "temperature": 0.9,
+                "top_p": 0.95,
+                "top_k": 40,
+                "max_output_tokens": 500,
+            },
+        )
+        
+        # Create conversation with system prompt and user message
+        prompt = f"{SYSTEM_PROMPT}\n\nUser ({user_name}): {user_message}\n\nANIMX CLAN:"
+        
+        response = model.generate_content(prompt)
+        
+        if response and response.text:
+            return response.text.strip()
+        else:
+            return "Hmm... kuch samajh nahi aaya 🤔 Phir se try kar!"
+            
+    except Exception as e:
+        logger.error(f"Gemini API error: {e}")
+        return "Arre yaar, thoda network issue lag raha hai 😅 Ek minute mein phir se try karna!"
 
 
 # ========================= COMMAND HANDLERS ========================= #
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /start command with inline buttons"""
     logger.info(
-        "/start received chat_id=%s type=%s user=%s",
+        "/start - chat_id=%s, user=%s",
         update.effective_chat.id if update.effective_chat else None,
-        update.effective_chat.type if update.effective_chat else None,
         update.effective_user.id if update.effective_user else None,
     )
-
+    
+    # Create inline keyboard
     keyboard = [
         [
-            InlineKeyboardButton("➕ Add to Group", url="https://t.me/AnimxClanBot?startgroup=true"),
-            InlineKeyboardButton("❓ Commands", callback_data="help"),
+            InlineKeyboardButton("💬 Chat With Me", callback_data="chat"),
+            InlineKeyboardButton("➕ Add To Group", url=f"https://t.me/{BOT_USERNAME[1:]}?startgroup=true"),
         ],
         [
-            InlineKeyboardButton("👤 Owner", url=f"https://t.me/{OWNER_USERNAME[1:]}"),
+            InlineKeyboardButton("📖 Help", callback_data="help"),
             InlineKeyboardButton("📢 Channel", url=f"https://t.me/{CHANNEL_USERNAME[1:]}"),
         ],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-
+    
     await update.effective_message.reply_text(
         START_TEXT,
         parse_mode=ParseMode.MARKDOWN,
@@ -196,262 +172,192 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-async def help_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    await query.answer()
-
-    help_text = (
-        "📋 *Available Commands*\n\n"
-        "`/play <song or URL>` - Play music in group voice chat\n"
-        "`/pause` - Pause current track\n"
-        "`/resume` - Resume playback\n"
-        "`/skip` - Skip to next track\n"
-        "`/stop` - Stop playback and leave\n\n"
-        "*Usage:*\n"
-        "1. Add bot to group\n"
-        "2. Start a voice chat\n"
-        "3. Use /play command\n"
-        "4. Bot joins and plays music"
-    )
-
-    keyboard = [[InlineKeyboardButton("◀️ Back", callback_data="start_menu")]]
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /help command"""
+    keyboard = [[InlineKeyboardButton("🏠 Back to Start", callback_data="start")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await query.edit_message_text(
-        help_text,
+    
+    await update.effective_message.reply_text(
+        HELP_TEXT,
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=reply_markup,
     )
 
 
-async def start_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+# ========================= CALLBACK HANDLERS ========================= #
+
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle inline button callbacks"""
     query = update.callback_query
     await query.answer()
+    
+    if query.data == "chat":
+        await query.edit_message_text(
+            "🎉 *Chal, shuru karte hain!* 🎉\n\n"
+            "Kuch bhi pucho, apna din batao, ya bas masti karo! 😄\n\n"
+            "Main yaha hoon tere liye. Bol! 👂",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+    
+    elif query.data == "help":
+        keyboard = [[InlineKeyboardButton("🏠 Back to Start", callback_data="start")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            HELP_TEXT,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup,
+        )
+    
+    elif query.data == "start":
+        keyboard = [
+            [
+                InlineKeyboardButton("💬 Chat With Me", callback_data="chat"),
+                InlineKeyboardButton("➕ Add To Group", url=f"https://t.me/{BOT_USERNAME[1:]}?startgroup=true"),
+            ],
+            [
+                InlineKeyboardButton("📖 Help", callback_data="help"),
+                InlineKeyboardButton("📢 Channel", url=f"https://t.me/{CHANNEL_USERNAME[1:]}"),
+            ],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            START_TEXT,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup,
+        )
 
-    keyboard = [
-        [
-            InlineKeyboardButton("➕ Add to Group", url="https://t.me/AnimxClanBot?startgroup=true"),
-            InlineKeyboardButton("❓ Commands", callback_data="help"),
-        ],
-        [
-            InlineKeyboardButton("👤 Owner", url=f"https://t.me/{OWNER_USERNAME[1:]}"),
-            InlineKeyboardButton("📢 Channel", url=f"https://t.me/{CHANNEL_USERNAME[1:]}"),
-        ],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await query.edit_message_text(
-        START_TEXT,
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=reply_markup,
+# ========================= MESSAGE HANDLERS ========================= #
+
+async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle private chat messages with Gemini AI"""
+    if not update.message or not update.message.text:
+        return
+    
+    user_message = update.message.text
+    user_name = update.effective_user.first_name or "Bhai"
+    
+    logger.info(f"Private message from {user_name}: {user_message}")
+    
+    # Send typing action
+    await context.bot.send_chat_action(
+        chat_id=update.effective_chat.id,
+        action="typing"
     )
+    
+    # Get AI response
+    ai_response = get_gemini_response(user_message, user_name)
+    
+    # Send response
+    await update.message.reply_text(ai_response)
 
 
-async def _ensure_group(update: Update) -> bool:
-    chat = update.effective_chat
-    if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
-        await update.effective_message.reply_text(
-            "This command can only be used in groups.",
-        )
-        return False
-    return True
-
-
-async def play(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _ensure_group(update):
+async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle group messages - reply only when mentioned or replied to"""
+    if not update.message or not update.message.text:
         return
-
-    message = update.effective_message
-    chat = update.effective_chat
-    assert chat is not None
-
-    if not context.args:
-        await message.reply_text("Usage: /play song_name_or_link")
+    
+    message_text = update.message.text.lower()
+    user_name = update.effective_user.first_name or "Bhai"
+    bot_mentioned = False
+    
+    # Check if bot is mentioned in text
+    if BOT_USERNAME.lower() in message_text or "@animxclanbot" in message_text:
+        bot_mentioned = True
+    
+    # Check if message is a reply to bot's message
+    if update.message.reply_to_message:
+        if update.message.reply_to_message.from_user.id == context.bot.id:
+            bot_mentioned = True
+    
+    # Only respond if mentioned
+    if not bot_mentioned:
         return
-
-    query = " ".join(context.args).strip()
-
-    # Simple anti-spam: limit length of query
-    if len(query) > 128:
-        await message.reply_text("Query too long.")
-        return
-
-    app: Application = context.application
-    player: MusicPlayer = app.bot_data["player"]
-
-    waiting = await message.reply_text("🔎 Searching and downloading audio...")
-
-    try:
-        file_path, title = await download_audio(query)
-    except Exception as e:  # noqa: BLE001
-        logger.error("Download failed: %s", e)
-        await waiting.edit_text("Failed to download audio. Try a different query.")
-        return
-
-    requested_by = update.effective_user.mention_html() if update.effective_user else "Unknown"
-    safe_title = escape(title)
-    track = Track(chat_id=chat.id, file_path=file_path, title=title, requested_by=requested_by)
-
-    position = await player.add_to_queue(track)
-
-    if position == 1 and not player.current.get(chat.id):
-        text = f"▶️ Now playing: <b>{safe_title}</b>\nRequested by: {requested_by}"
-    else:
-        text = (
-            f"✅ Added to queue: <b>{safe_title}</b> (position {position})\n"
-            f"Requested by: {requested_by}"
-        )
-
-    try:
-        await waiting.edit_text(text, parse_mode=ParseMode.HTML)
-    except telegram.error.BadRequest:
-        await message.reply_text(text, parse_mode=ParseMode.HTML)
-
-
-async def pause(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _ensure_group(update):
-        return
-
-    chat = update.effective_chat
-    assert chat is not None
-
-    app: Application = context.application
-    player: MusicPlayer = app.bot_data["player"]
-
-    if await player.pause(chat.id):
-        await update.effective_message.reply_text("⏸ Paused.")
-    else:
-        await update.effective_message.reply_text("Nothing is playing or pause failed.")
-
-
-async def resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _ensure_group(update):
-        return
-
-    chat = update.effective_chat
-    assert chat is not None
-
-    app: Application = context.application
-    player: MusicPlayer = app.bot_data["player"]
-
-    if await player.resume(chat.id):
-        await update.effective_message.reply_text("▶️ Resumed.")
-    else:
-        await update.effective_message.reply_text("Nothing is paused or resume failed.")
-
-
-async def skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _ensure_group(update):
-        return
-
-    chat = update.effective_chat
-    assert chat is not None
-
-    app: Application = context.application
-    player: MusicPlayer = app.bot_data["player"]
-
-    if await player.skip(chat.id):
-        await update.effective_message.reply_text("⏭ Skipped.")
-    else:
-        await update.effective_message.reply_text("Nothing to skip.")
-
-
-async def stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _ensure_group(update):
-        return
-
-    chat = update.effective_chat
-    assert chat is not None
-
-    app: Application = context.application
-    player: MusicPlayer = app.bot_data["player"]
-
-    await player.stop(chat.id)
-    await update.effective_message.reply_text("🛑 Stopped and left voice chat.")
+    
+    logger.info(f"Group message from {user_name}: {update.message.text}")
+    
+    # Send typing action
+    await context.bot.send_chat_action(
+        chat_id=update.effective_chat.id,
+        action="typing"
+    )
+    
+    # Get AI response
+    ai_response = get_gemini_response(update.message.text, user_name)
+    
+    # Send response
+    await update.message.reply_text(ai_response)
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.exception("Unhandled error: %s", context.error)
+    """Log errors"""
+    logger.exception("Exception while handling update:", exc_info=context.error)
 
 
-# ========================= APP LIFECYCLE ========================= #
+# ========================= BOT LIFECYCLE ========================= #
 
-
-async def on_startup(app: Application) -> None:
-    logger.info("Deleting webhook and starting clients...")
-
-    # Ensure no webhook conflicts exist
+async def post_init(app: Application) -> None:
+    """Run after bot initialization"""
+    logger.info("🚀 Bot initializing...")
+    
     try:
         await app.bot.delete_webhook(drop_pending_updates=True)
-    except Exception:
-        logger.exception("Failed to delete webhook")
-
-    # Create a Pyrogram client using the same bot token
-    pyro_client = Client(
-        "animx_clan_bot",
-        api_id=API_ID,
-        api_hash=API_HASH,
-        bot_token=BOT_TOKEN,
-        workdir="./",
-        in_memory=True,
-    )
-
-    await pyro_client.start()
-
-    player = MusicPlayer(pyro_client)
-    await player.start()
-
-    # Store shared objects in app.bot_data
-    app.bot_data["pyro_client"] = pyro_client
-    app.bot_data["player"] = player
-
-    logger.info("Startup completed.")
+        logger.info("✅ Webhook deleted")
+    except Exception as e:
+        logger.warning(f"⚠️ Could not delete webhook: {e}")
+    
+    bot_info = await app.bot.get_me()
+    logger.info(f"✅ Bot started: @{bot_info.username}")
+    logger.info("💬 Ready to chat!")
 
 
-async def on_shutdown(app: Application) -> None:
-    logger.info("Shutting down PyTgCalls and Pyrogram client...")
-
-    player: MusicPlayer = app.bot_data.get("player")
-    if player:
-        try:
-            await player.shutdown()
-        except Exception:
-            logger.exception("Error while shutting down player")
-
-    pyro_client: Client = app.bot_data.get("pyro_client")
-    if pyro_client:
-        try:
-            await pyro_client.stop()
-        except Exception:
-            logger.exception("Error while stopping Pyrogram client")
-
-    logger.info("Shutdown complete.")
+async def post_shutdown(app: Application) -> None:
+    """Cleanup before shutdown"""
+    logger.info("👋 Bot shutting down...")
 
 
 def main() -> None:
-    application: Application = ApplicationBuilder().token(BOT_TOKEN).build()
-
+    """Main function to run the bot"""
+    
+    # Build application
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
+    
     # Register lifecycle hooks
-    application.post_init = on_startup
-    application.post_shutdown = on_shutdown
-
+    application.post_init = post_init
+    application.post_shutdown = post_shutdown
+    
     # Register command handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("play", play))
-    application.add_handler(CommandHandler("pause", pause))
-    application.add_handler(CommandHandler("resume", resume))
-    application.add_handler(CommandHandler("skip", skip))
-    application.add_handler(CommandHandler("stop", stop_cmd))
-
-    # Register callback handlers for inline buttons
-    application.add_handler(CallbackQueryHandler(help_button, pattern="^help$"))
-    application.add_handler(CallbackQueryHandler(start_menu, pattern="^start_menu$"))
-
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("help", help_command))
+    
+    # Register callback handler for inline buttons
+    application.add_handler(CallbackQueryHandler(button_callback))
+    
+    # Register message handlers
+    # Private messages (all text messages in private chat)
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
+            handle_private_message,
+        )
+    )
+    
+    # Group messages (only when mentioned)
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
+            handle_group_message,
+        )
+    )
+    
     # Error handler
     application.add_error_handler(error_handler)
-
-    logger.info("%s (%s) is starting...", BOT_NAME, BOT_USERNAME)
-
+    
+    # Start the bot
+    logger.info(f"🎉 {BOT_NAME} is starting...")
+    
     application.run_polling(
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=True,
