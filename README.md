@@ -1,103 +1,284 @@
-# ANIMX CLAN Telegram Music Bot
+# ANIMX CLAN Telegram Bot - Baby ❤️
 
-ANIMX CLAN is a production-ready Telegram music bot that plays high-quality audio in group voice chats.
+A feature-rich Telegram bot with AI chat, music downloads, admin tools, and anti-spam protection.
 
-- **Bot Name:** ANIMX CLAN
+- **Bot Name:** Baby ❤️ (ANIMX CLAN)
 - **Bot Username:** @AnimxClanBot
 - **Language:** Python 3.10+
-- **Libraries:** python-telegram-bot, pyrogram, pytgcalls, yt-dlp, ffmpeg
+- **Framework:** python-telegram-bot 21.4
+- **AI:** Google Gemini + OpenRouter (fallback)
 
 ---
 
-## Features
+## ✨ Features
 
-- `/start` – Show welcome message
-- `/play <song name or YouTube URL>` – Play music in the group voice chat
-- `/pause` – Pause current track
-- `/resume` – Resume playback
-- `/skip` – Skip current track
-- `/stop` – Stop music, clear queue, and leave voice chat
-- Multi-group support
-- Automatic join/leave of group voice chats
-- High-quality audio streaming
-- Graceful error handling and basic anti-spam checks
-- Automatic cleanup of downloaded files
+### 🎵 Music Download
+- `/song <name>` - Download songs with Telegram music player
+- `/download <name>` - Same as /song
+- `/yt <link>` - Download from YouTube URL
+- `play <song name>` - Quick play without command
+- MP3 conversion with metadata (title, artist, duration)
+- Automatic file cleanup
+
+### 💬 AI Chat
+- Natural Hinglish conversations
+- Works in private chats and groups
+- Smart group triggers (mention, reply, "baby" keyword)
+- Language switching (English/Hindi/Hinglish)
+- Personality: Friendly, cute, human-like "Baby"
+
+### 📢 Broadcasting
+- `/broadcast <message>` - Send to all users (admin only)
+- `/stop` - Opt out of broadcasts
+- Automatic opt-out tracking
+- Group + user broadcast support
+
+### 🎯 Dynamic Commands (37+)
+**Greetings:** `/gm`, `/ga`, `/ge`, `/gn`, `/bye`, `/welcome`, `/thanks`, `/sorry`, `/mood`
+**Chat:** `/chat`, `/ask`, `/about`, `/privacy`
+**Emotions:** `/sad`, `/happy`, `/angry`, `/motivate`, `/howareyou`, `/missyou`, `/hug`
+**Productivity:** `/tip`, `/confidence`, `/focus`, `/sleep`, `/lifeline`
+**Fun:** `/joke`, `/roast`, `/truth`, `/dare`, `/fact`
+
+### 🛡️ Admin Moderation (9 commands)
+- `/del` - Delete messages
+- `/ban` / `/unban` - Ban management
+- `/mute` / `/unmute` - Mute management
+- `/promote` / `/demote` - Admin management
+- `/pin` / `/unpin` - Pin messages
+- `/admin` - Admin help menu (admin-only)
+
+### 🚫 Anti-Spam System
+- Detects repeated messages (3x auto-delete)
+- Prevents flooding (5 msgs/10s)
+- Blocks spam links
+- Stops emoji floods (10+ emojis)
+- Never moderates admins
+- Friendly warnings: "Thoda slow 🙂 spam mat karo"
+
+### 👥 Group Features
+- `/all <message>` - Tag active users (admin only)
+- `@all <message>` - Quick tag mention
+- Auto-group registration
+- Cooldown system (5 min)
 
 ---
 
-## 1. Prerequisites
+## 📋 Prerequisites
 
 - Python **3.10+**
-- A Telegram **Bot Token** from [@BotFather](https://t.me/BotFather)
-- A Telegram **API ID** and **API Hash** from https://my.telegram.org/apps
-- **ffmpeg** installed and available in your system `PATH`
+- **Bot Token** from [@BotFather](https://t.me/BotFather)
+- **Google Gemini API Key** from [AI Studio](https://aistudio.google.com/app/apikey)
+- **FFmpeg** (for audio conversion)
 
-### Install ffmpeg
+### Install FFmpeg
 
 #### Windows
+1. Download from: https://www.gyan.dev/ffmpeg/builds/
+2. Extract to `C:\ffmpeg`
+3. Add `C:\ffmpeg\bin` to System PATH
+4. Verify: `ffmpeg -version`
 
-1. Download a static build from: https://www.gyan.dev/ffmpeg/builds/
-2. Extract the archive (e.g. to `C:\ffmpeg`).
-3. Add `C:\ffmpeg\bin` to your **System PATH**:
-   - Search for "Environment Variables" → **Edit the system environment variables**.
-   - Click **Environment Variables...**.
-   - Select `Path` under **System variables** → **Edit** → **New** → add `C:\ffmpeg\bin`.
-   - Click **OK** on all dialogs.
-4. Open a new terminal and run:
-   ```bash
-   ffmpeg -version
-   ```
-   You should see version output.
-
-#### Ubuntu / Debian (Linux)
-
+#### Linux (Ubuntu/Debian)
 ```bash
 sudo apt update
 sudo apt install -y ffmpeg
-ffmpeg -version
-```
-
-#### CentOS / RHEL
-
-```bash
-sudo yum install -y epel-release
-sudo yum install -y ffmpeg
-ffmpeg -version
 ```
 
 ---
 
-## 2. Installation
+## 🚀 Installation
 
-Clone or copy the `ANIMX_MUSIC_BOT` folder to your server or machine.
+### Local Setup
+
+## 🚀 Installation
+
+### Local Setup
 
 ```bash
 cd ANIMX_MUSIC_BOT
 python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Activate virtual environment
+# Windows PowerShell:
+.venv\Scripts\Activate.ps1
+# Linux/Mac:
+source .venv/bin/activate
+
+# Install dependencies
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-> On Windows PowerShell, activate with:
->
-> ```powershell
-> .venv\Scripts\Activate.ps1
-> ```
+---
+
+## ⚙️ Configuration
+
+### Method 1: Environment Variables (Recommended for Railway)
+
+Set these in Railway dashboard or `.env` file:
+
+```env
+BOT_TOKEN=your_bot_token_here
+GEMINI_API_KEY=your_gemini_api_key_here
+ADMIN_ID=your_telegram_user_id
+```
+
+### Method 2: Direct in Code (Local Testing)
+
+Edit `bot.py` and set:
+```python
+BOT_TOKEN = "your_bot_token_here"
+GEMINI_API_KEY = "your_gemini_key_here"
+ADMIN_ID = your_user_id
+```
 
 ---
 
-## 3. Configuration
+## 🎮 Running the Bot
 
-Open `config.py` and fill in your credentials:
-
-```python
-API_ID = 123456  # from my.telegram.org
-API_HASH = "your_api_hash_here"
-BOT_TOKEN = "123456:ABC-DEF_your_bot_token_here"
+### Local Run
+```bash
+cd ANIMX_MUSIC_BOT
+python bot.py
 ```
 
-You can also set these via environment variables (`API_ID`, `API_HASH`, `BOT_TOKEN`) if preferred.
+### Railway Deployment
+
+1. Push to GitHub:
+```bash
+git add .
+git commit -m "Deploy bot"
+git push origin main
+```
+
+2. Railway auto-deploys from GitHub
+3. Set environment variables in Railway dashboard
+4. Bot starts automatically!
+
+See [RAILWAY_DEPLOY.md](RAILWAY_DEPLOY.md) for detailed Railway instructions.
+
+---
+
+## 📖 Usage
+
+### Private Chat
+- Just message the bot naturally
+- Use commands like `/song <name>` for music
+- Bot responds with AI personality
+
+### Group Chat
+Bot responds when:
+- Mentioned: `@AnimxClanBot hello`
+- Replied to
+- "baby" keyword detected
+- Greetings: hi, hello, gm, gn
+- Commands used
+
+### Admin Commands (Groups only)
+1. Add bot to group
+2. Make bot admin
+3. Use admin commands: `/del`, `/ban`, `/mute`, etc.
+4. View admin help: `/admin`
+
+---
+
+## 🔧 Troubleshooting
+
+### Bot not responding?
+- Check BOT_TOKEN is correct
+- Verify GEMINI_API_KEY is active
+- In groups, mention bot or reply to it
+
+### Song download fails?
+- Check FFmpeg is installed: `ffmpeg -version`
+- Ensure yt-dlp is updated: `pip install -U yt-dlp`
+- Verify internet connection
+
+### Gemini API errors?
+- Check API key at https://aistudio.google.com
+- Verify API quota not exceeded
+- OpenRouter will be used as fallback if configured
+
+---
+
+## 📁 File Structure
+
+```
+ANIMX_MUSIC_BOT/
+├── bot.py                    # Main bot file (3000+ lines)
+├── config.py                 # Configuration (optional)
+├── requirements.txt          # Python dependencies
+├── README.md                 # This file
+├── RAILWAY_DEPLOY.md         # Railway deployment guide
+├── .gitignore               # Git ignore rules
+├── .env.example             # Environment variables template
+├── users_database.json      # Registered users (auto-created)
+├── groups_database.json     # Registered groups (auto-created)
+├── opted_out_users.json     # Broadcast opt-outs (auto-created)
+├── downloads/               # Temporary song downloads (auto-cleanup)
+└── utils/
+    └── yt.py               # YouTube download utilities
+```
+
+---
+
+## 🎯 Command List
+
+### Basic
+- `/start` - Welcome message
+- `/help` - Command list
+- `/stop` - Opt out of broadcasts
+
+### Music
+- `/song <name>` - Download song
+- `/yt <url>` - Download from YouTube
+- `play <name>` - Quick play
+
+### Chat & Info
+- `/chat <message>` - AI chat
+- `/ask <question>` - Ask anything
+- `/about` - Bot info
+- `/privacy` - Privacy policy
+
+### Emotions & Support
+- `/sad`, `/happy`, `/angry`
+- `/motivate`, `/confidence`
+- `/howareyou`, `/missyou`, `/hug`
+
+### Fun
+- `/joke`, `/roast`, `/fact`
+- `/truth`, `/dare`
+
+### Admin (Groups)
+- `/del` - Delete message
+- `/ban` / `/unban` - Ban user
+- `/mute` / `/unmute` - Mute user
+- `/promote` / `/demote` - Admin management
+- `/pin` / `/unpin` - Pin management
+- `/admin` - Admin help
+
+### Group Utils
+- `/all <message>` - Tag active users
+- `@all <message>` - Quick tag
+
+---
+
+## 🤝 Credits
+
+- **Developer:** @kunal1k5
+- **Bot:** Baby ❤️ (ANIMX CLAN)
+- **Framework:** python-telegram-bot
+- **AI:** Google Gemini
+- **Music:** yt-dlp + FFmpeg
+
+---
+
+## 📜 License
+
+This bot is for personal/educational use. 
+
+Made with ❤️ by ANIMX CLAN
 
 The `DOWNLOAD_DIR` directory (default: `downloads`) is used for temporary audio files and is created automatically.
 

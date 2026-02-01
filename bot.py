@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Final, Dict, List, Tuple, Optional, Set, Any
 
 import httpx
-import google.generativeai as genai
+from google import genai
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Chat, ChatPermissions
 from telegram.constants import ChatType, ParseMode, ChatMemberStatus
 from telegram.request import HTTPXRequest
@@ -44,8 +44,9 @@ if not GEMINI_API_KEY and not OPENROUTER_API_KEY:
     raise ValueError("No AI API key set! Provide GEMINI_API_KEY or OPENROUTER_API_KEY.")
 
 # Configure Gemini AI client (only if key is provided)
+GEMINI_CLIENT: Optional[genai.Client] = None
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+    GEMINI_CLIENT = genai.Client(api_key=GEMINI_API_KEY)
 
 # Model fallback order (most stable first)
 GEMINI_MODELS: Final[list[str]] = [
@@ -656,34 +657,13 @@ logger = logging.getLogger("ANIMX_CLAN_BOT")
 
 # ========================= GEMINI AI HELPER ========================= #
 
-def _normalize_model_name(name: str) -> str:
-    return name.split("/", 1)[1] if name.startswith("models/") else name
-
-
 def _get_model_candidates() -> list[str]:
+    """Get available Gemini models (using new google.genai API)"""
     if GEMINI_MODEL_CACHE:
         return GEMINI_MODEL_CACHE
-
-    discovered: list[str] = []
-
-    try:
-        for model in genai.list_models():
-            name = model.name
-            if not name:
-                continue
-
-            name = _normalize_model_name(str(name))
-
-            # Check if model supports generateContent
-            if not "generateContent" in model.supported_generation_methods:
-                continue
-
-            discovered.append(name)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to list Gemini models: %s", exc)
-
-    combined = list(dict.fromkeys(GEMINI_MODELS + discovered))
-    GEMINI_MODEL_CACHE.extend(combined or GEMINI_MODELS)
+    
+    # Just return predefined models since new API doesn't have list_models
+    GEMINI_MODEL_CACHE.extend(GEMINI_MODELS)
     return GEMINI_MODEL_CACHE
 
 
@@ -750,11 +730,11 @@ def get_ai_response(
 
 def get_gemini_response(user_message: str, user_name: str = "User", system_prompt: Optional[str] = None) -> str:
     """
-    Get AI response from Gemini with error handling.
+    Get AI response from Gemini with error handling (using new google.genai API).
     Returns a friendly response or fallback message.
     Supports custom system prompts for different contexts.
     """
-    if not GEMINI_API_KEY:
+    if not GEMINI_API_KEY or not GEMINI_CLIENT:
         return "AI service temporarily unavailable. Please try again later."
 
     try:
@@ -768,17 +748,18 @@ def get_gemini_response(user_message: str, user_name: str = "User", system_promp
 
         for model_name in _get_model_candidates():
             try:
-                model = genai.GenerativeModel(
-                    model_name,
-                    system_instruction=sys_prompt,
-                    generation_config={
+                # Use new google.genai API
+                response = GEMINI_CLIENT.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config={
+                        "system_instruction": sys_prompt,
                         "temperature": 0.9,
                         "top_p": 0.95,
                         "top_k": 40,
                         "max_output_tokens": 500,
                     }
                 )
-                response = model.generate_content(prompt)
 
                 if response and response.text:
                     return response.text.strip()
