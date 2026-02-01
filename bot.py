@@ -1374,18 +1374,18 @@ async def all_mention_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     if update.effective_chat.type == ChatType.PRIVATE:
         return
     
+    # Check if message contains @all (case-insensitive)
+    if "@all" not in update.message.text.lower():
+        return  # Not an @all mention, let other handlers process it
+    
     # Register group
     await _register_group(update.effective_chat.id)
-    
-    # Check if message contains @all
-    if "@all" not in update.message.text.lower():
-        return
     
     # Check admin status
     is_admin = await _check_admin_status(update, context)
     if not is_admin:
         await update.message.reply_text(
-            "Only group admins can trigger @all alerts! 🚫",
+            "Sirf admins @all use kar sakte hain! 🚫",
             reply_to_message_id=update.message.message_id
         )
         return
@@ -1394,7 +1394,7 @@ async def all_mention_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     if _check_cooldown(update.effective_chat.id):
         remaining = int(COOLDOWN_SECONDS - (time.time() - TAGGING_COOLDOWN[update.effective_chat.id]))
         await update.message.reply_text(
-            f"Cooldown active! Wait {remaining} seconds. 🕐",
+            f"Thoda ruko! {remaining} seconds baad phir try karo 🕐",
             reply_to_message_id=update.message.message_id
         )
         return
@@ -1404,7 +1404,8 @@ async def all_mention_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     if not active_users:
         await update.message.reply_text(
-            "No active users to alert! 🤷",
+            "Koi active user nahi hai abhi! 🤷\n"
+            "Log chat karne ke baad try karo.",
             reply_to_message_id=update.message.message_id
         )
         return
@@ -1431,7 +1432,7 @@ async def all_mention_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         if custom_msg:
             message_text = f"{mentions}\n\n📢 {custom_msg}"
         else:
-            message_text = f"{mentions}\n\n🔔 Group Alert!"
+            message_text = f"{mentions}\n\n🔔 Alert!"
         
         try:
             await context.bot.send_message(
@@ -1442,6 +1443,25 @@ async def all_mention_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
         except Exception as e:
             logger.error(f"Failed to send @all alert: {e}")
+            await update.message.reply_text(
+                "Tag bhejne mein error aa gaya 😅 Shayad bot admin nahi hai?",
+                reply_to_message_id=update.message.message_id
+            )
+            return
+    
+    # Send confirmation
+    status_msg = f"✅ {len(active_users)} users ko tag kar diya!"
+    if len(batches) > 1:
+        status_msg += f" ({len(batches)} messages mein)"
+    
+    try:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=status_msg,
+            reply_to_message_id=update.message.message_id
+        )
+    except:
+        pass
 
 
 # ========================= GREETING COMMANDS ========================= #
@@ -2761,6 +2781,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         # Check for spam FIRST (before any processing)
         spam_handled = await _check_spam(update, context)
         if spam_handled:
+            logger.info(f"🚫 Spam detected and handled from {user_name}")
             return  # Spam detected and handled, don't process further
         
         # Register user
@@ -2838,10 +2859,10 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         
         # If NO trigger, IGNORE silently
         if not should_respond:
-            logger.debug("⏭️ No trigger - ignoring message")
+            logger.debug(f"⏭️ No trigger - ignoring message from {user_name}: {message_text[:30]}")
             return
         
-        logger.info(f"✅ Responding to {user_name} in {chat_title}")
+        logger.info(f"🎯 RESPONDING to {user_name} in [{chat_title}]: {message_text[:50]}")
         
         # Detect language preference from message
         if "english me bolo" in message_text_lower or "speak in english" in message_text_lower:
@@ -3052,15 +3073,15 @@ def main() -> None:
         )
     )
     
-    # @all mention handler (process before regular group messages)
+    # Group messages - @all mention handler (higher priority - checks for @all first)
     application.add_handler(
         MessageHandler(
-            filters.TEXT & ~filters.COMMAND & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
+            filters.TEXT & ~filters.COMMAND & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP) & filters.Regex(r'@all'),
             all_mention_handler,
         )
     )
     
-    # Group messages (all text messages in group chat)
+    # Group messages - regular message handler (processes after @all check)
     application.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
