@@ -9,6 +9,9 @@ import shutil
 from pathlib import Path
 from typing import Final, Dict, List, Tuple, Optional, Set, Any
 
+# Initialize random seed for better randomization
+random.seed()
+
 import httpx
 from google import genai
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Chat, ChatPermissions
@@ -822,9 +825,17 @@ def get_openrouter_response(
                 .get("message", {})
                 .get("content", "")
             )
-            return content.strip() if content else None
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("OpenRouter API error: %s", exc)
+            if content:
+                logger.info(f"✅ OpenRouter success: {len(content)} chars")
+                return content.strip()
+            else:
+                logger.warning("⚠️ OpenRouter returned empty content")
+                return None
+    except httpx.HTTPStatusError as exc:
+        logger.error(f"❌ OpenRouter HTTP error {exc.response.status_code}: {exc.response.text[:200]}")
+        return None
+    except Exception as exc:
+        logger.error(f"❌ OpenRouter error: {type(exc).__name__}: {exc}")
         return None
 
 
@@ -873,10 +884,11 @@ def get_gemini_response(user_message: str, user_name: str = "User", system_promp
                 )
 
                 if response and response.text:
+                    logger.info(f"✅ Gemini success ({model_name}): {len(response.text)} chars")
                     return response.text.strip()
-            except Exception as inner_exc:  # noqa: BLE001
+            except Exception as inner_exc:
                 last_error = inner_exc
-                logger.warning("Gemini model failed: %s (%s)", model_name, inner_exc)
+                logger.warning(f"⚠️ Gemini model {model_name} failed: {type(inner_exc).__name__}: {str(inner_exc)[:100]}")
                 continue
 
         if last_error:
