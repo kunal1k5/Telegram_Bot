@@ -104,7 +104,7 @@ MOOD_RESPONSES = {
         "Excited aa gya! Kya scene hai? 🔥",
         "Arey wahh! Itni excitement se! 🚀",
     ],
-]
+}
 
 
 # ========================= HELPER FUNCTIONS ========================= #
