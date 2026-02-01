@@ -29,6 +29,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ANIMX_CLAN_CHAT")
 
+# Version: 1.0.1
 BOT_NAME: Final[str] = "ANIMX CLAN Chat Bot"
 BOT_USERNAME: Final[str] = "@AnimxClanBot"
 OWNER_USERNAME: Final[str] = "@kunal1k5"
