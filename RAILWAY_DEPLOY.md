@@ -3,7 +3,8 @@
 ## Prerequisites
 1. Railway account (https://railway.app)
 2. Telegram Bot Token from @BotFather
-3. Google Gemini API Key (https://aistudio.google.com/app/apikey)
+3. **OpenRouter API Key** (https://openrouter.ai/keys) - Recommended
+   - OR Google Gemini API Key (https://aistudio.google.com/app/apikey)
 4. GitHub repository with the bot code
 
 ---
@@ -12,10 +13,16 @@
 
 ### 1. Prepare Environment Variables
 
-You need two environment variables:
-
+**Required:**
 - `BOT_TOKEN` - Your Telegram bot token from @BotFather
-- `GEMINI_API_KEY` - Your Google Gemini API key
+
+**AI Service (Choose one or both):**
+- `OPENROUTER_API_KEY` - OpenRouter API key (Primary, recommended)
+- `OPENROUTER_MODEL` - Model to use (default: `openai/gpt-4o-mini`)
+- `GEMINI_API_KEY` - Google Gemini API key (Fallback, optional)
+
+**Optional:**
+- `ADMIN_ID` - Your Telegram user ID for admin features
 
 ### 2. Deploy on Railway
 
@@ -51,8 +58,13 @@ In Railway dashboard:
 2. Go to **Variables** tab
 3. Add these variables:
    - `BOT_TOKEN`: `123456:ABC-DEF...` (your bot token)
-   - `GEMINI_API_KEY`: `AIza...` (your Gemini key)
+   - `OPENROUTER_API_KEY`: `sk-or-v1-...` (your OpenRouter key)
+   - `OPENROUTER_MODEL`: `openai/gpt-4o-mini` (optional, this is default)
+   - `GEMINI_API_KEY`: `AIza...` (optional fallback)
+   - `ADMIN_ID`: `7971841264` (your Telegram user ID)
 4. Click "Deploy" to restart with new variables
+
+**Note:** Bot will use OpenRouter first, then fallback to Gemini if needed.
 
 ### 4. Configure Service Type
 
@@ -75,12 +87,14 @@ You should see:
 
 ---
 
-## Troubleshooting
+## Troubleshootingis valid
+- Ensure at least one AI API key is set (OPENROUTER_API_KEY or GEMINI_API_KEY)
 
-### Bot not starting?
-- Check environment variables are set correctly
-- View logs for error messages
-- Ensure `BOT_TOKEN` and `GEMINI_API_KEY` are valid
+### AI API errors?
+- **OpenRouter:** Verify API key is active at https://openrouter.ai/keys
+- **Gemini:** Verify API key is active at https://aistudio.google.com
+- Check API quota/limits
+- Bot will automatically fallback between services_KEY` are valid
 
 ### Gemini API errors?
 - Verify API key is active at https://aistudio.google.com

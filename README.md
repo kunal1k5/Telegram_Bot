@@ -6,7 +6,7 @@ A feature-rich Telegram bot with AI chat, music downloads, admin tools, and anti
 - **Bot Username:** @AnimxClanBot
 - **Language:** Python 3.10+
 - **Framework:** python-telegram-bot 21.4
-- **AI:** Google Gemini + OpenRouter (fallback)
+- **AI:** OpenRouter (Primary) + Google Gemini (Fallback)
 
 ---
 
@@ -68,7 +68,8 @@ A feature-rich Telegram bot with AI chat, music downloads, admin tools, and anti
 
 - Python **3.10+**
 - **Bot Token** from [@BotFather](https://t.me/BotFather)
-- **Google Gemini API Key** from [AI Studio](https://aistudio.google.com/app/apikey)
+- **OpenRouter API Key** from [OpenRouter](https://openrouter.ai/) (Recommended)
+  - OR **Google Gemini API Key** from [AI Studio](https://aistudio.google.com/app/apikey)
 - **FFmpeg** (for audio conversion)
 
 ### Install FFmpeg
@@ -119,16 +120,26 @@ pip install -r requirements.txt
 Set these in Railway dashboard or `.env` file:
 
 ```env
-BOT_TOKEN=your_bot_token_here
+
+# OpenRouter (Recommended - Primary AI service)
+OPENROUTER_API_KEY=your_openrouter_api_key_here
+OPENROUTER_MODEL=openai/gpt-4o-mini
+
+# Gemini (Optional fallback if OpenRouter fails)
 GEMINI_API_KEY=your_gemini_api_key_here
+
 ADMIN_ID=your_telegram_user_id
 ```
+
+**Note:** Bot will use OpenRouter first, then fallback to Gemini if OpenRouter is unavailable.
 
 ### Method 2: Direct in Code (Local Testing)
 
 Edit `bot.py` and set:
 ```python
 BOT_TOKEN = "your_bot_token_here"
+OPENROUTER_API_KEY = "your_openrouter_key_here"  # Primary
+GEMINI_API_KEY = "your_gemini_key_here"  # Fallback (optional)
 GEMINI_API_KEY = "your_gemini_key_here"
 ADMIN_ID = your_user_id
 ```
@@ -177,18 +188,19 @@ Bot responds when:
 
 ### Admin Commands (Groups only)
 1. Add bot to group
-2. Make bot admin
-3. Use admin commands: `/del`, `/ban`, `/mute`, etc.
-4. View admin help: `/admin`
-
----
-
-## 🔧 Troubleshooting
-
-### Bot not responding?
-- Check BOT_TOKEN is correct
-- Verify GEMINI_API_KEY is active
+2. Make bOPENROUTER_API_KEY is active (or GEMINI_API_KEY)
 - In groups, mention bot or reply to it
+
+### Song download fails?
+- Check FFmpeg is installed: `ffmpeg -version`
+- Ensure yt-dlp is updated: `pip install -U yt-dlp`
+- Verify internet connection
+
+### AI API errors?
+- **OpenRouter:** Check API key at https://openrouter.ai/keys
+- **Gemini:** Check API key at https://aistudio.google.com
+- Bot uses OpenRouter first, then Gemini as fallback
+- Check API quota not exceed
 
 ### Song download fails?
 - Check FFmpeg is installed: `ffmpeg -version`
@@ -258,7 +270,7 @@ ANIMX_MUSIC_BOT/
 - `/pin` / `/unpin` - Pin management
 - `/admin` - Admin help
 
-### Group Utils
+### Group OpenRouter (Primary) + Google Gemini (Fallback)
 - `/all <message>` - Tag active users
 - `@all <message>` - Quick tag
 
