@@ -3323,7 +3323,7 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
         update_group_setting(group_id, "auto_delete_enabled", not current)
         
         keyboard = [
-            [InlineKeyboardButton(f"Message Count: {get_group_setting(group_id, 'auto_delete_count')}", callback_data=f"setting_autocount_{group_id}")],
+            [InlineKeyboardButton(f"✏️ Edit Count: {get_group_setting(group_id, 'auto_delete_count')}", callback_data=f"setting_editautocount_{group_id}")],
             [InlineKeyboardButton("🔙 Back", callback_data=f"setting_menu_{group_id}")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -3331,17 +3331,63 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_text(
             f"🗑️ *Auto Delete Messages*\n\n"
             f"Status: {'✅ ENABLED' if not current else '❌ DISABLED'}\n\n"
-            f"Messages will be {'deleted' if not current else 'kept'} after {get_group_setting(group_id, 'auto_delete_count')} messages.",
+            f"Messages will be {'deleted' if not current else 'kept'} after {get_group_setting(group_id, 'auto_delete_count')} messages.\n\n"
+            f"Click ✏️ button to change message count.",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=reply_markup
         )
+    
+    elif action == "editautocount":
+        current_count = get_group_setting(group_id, "auto_delete_count")
+        
+        keyboard = [
+            [InlineKeyboardButton("50", callback_data=f"setting_setautocount_{group_id}_50"),
+             InlineKeyboardButton("100", callback_data=f"setting_setautocount_{group_id}_100")],
+            [InlineKeyboardButton("200", callback_data=f"setting_setautocount_{group_id}_200"),
+             InlineKeyboardButton("500", callback_data=f"setting_setautocount_{group_id}_500")],
+            [InlineKeyboardButton("1000", callback_data=f"setting_setautocount_{group_id}_1000"),
+             InlineKeyboardButton("2000", callback_data=f"setting_setautocount_{group_id}_2000")],
+            [InlineKeyboardButton("🔙 Back", callback_data=f"setting_autodel_{group_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"✏️ *Edit Auto-Delete Count*\n\n"
+            f"Current: {current_count} messages\n\n"
+            f"Select new value:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
+        )
+    
+    elif action == "setautocount":
+        if len(parts) >= 4:
+            new_count = int(parts[3])
+            update_group_setting(group_id, "auto_delete_count", new_count)
+            await query.answer(f"✅ Auto-delete count set to {new_count}!")
+            
+            # Go back to auto-delete menu
+            current = get_group_setting(group_id, "auto_delete_enabled")
+            keyboard = [
+                [InlineKeyboardButton(f"✏️ Edit Count: {new_count}", callback_data=f"setting_editautocount_{group_id}")],
+                [InlineKeyboardButton("🔙 Back", callback_data=f"setting_menu_{group_id}")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                f"🗑️ *Auto Delete Messages*\n\n"
+                f"Status: {'✅ ENABLED' if current else '❌ DISABLED'}\n\n"
+                f"Messages will be {'deleted' if current else 'kept'} after {new_count} messages.\n\n"
+                f"Click ✏️ button to change message count.",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=reply_markup
+            )
         
     elif action == "spam":
         current = get_group_setting(group_id, "spam_protection")
         update_group_setting(group_id, "spam_protection", not current)
         
         keyboard = [
-            [InlineKeyboardButton(f"Threshold: {get_group_setting(group_id, 'spam_threshold')} msgs", callback_data=f"setting_spamcount_{group_id}")],
+            [InlineKeyboardButton(f"✏️ Edit Threshold: {get_group_setting(group_id, 'spam_threshold')} msgs", callback_data=f"setting_editspamcount_{group_id}")],
             [InlineKeyboardButton(f"Delete Admin Spam: {'✅' if get_group_setting(group_id, 'delete_admin_spam') else '❌'}", callback_data=f"setting_adminspam_{group_id}")],
             [InlineKeyboardButton("🔙 Back", callback_data=f"setting_menu_{group_id}")]
         ]
@@ -3350,18 +3396,67 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_text(
             f"🛡️ *Spam Protection*\n\n"
             f"Status: {'✅ ENABLED' if not current else '❌ DISABLED'}\n\n"
-            f"Threshold: {get_group_setting(group_id, 'spam_threshold')} messages in 10 seconds",
+            f"Threshold: {get_group_setting(group_id, 'spam_threshold')} messages in 10 seconds\n\n"
+            f"Click ✏️ button to change threshold.",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=reply_markup
         )
+    
+    elif action == "editspamcount":
+        current_threshold = get_group_setting(group_id, "spam_threshold")
+        
+        keyboard = [
+            [InlineKeyboardButton("3", callback_data=f"setting_setspamcount_{group_id}_3"),
+             InlineKeyboardButton("5", callback_data=f"setting_setspamcount_{group_id}_5")],
+            [InlineKeyboardButton("7", callback_data=f"setting_setspamcount_{group_id}_7"),
+             InlineKeyboardButton("10", callback_data=f"setting_setspamcount_{group_id}_10")],
+            [InlineKeyboardButton("15", callback_data=f"setting_setspamcount_{group_id}_15"),
+             InlineKeyboardButton("20", callback_data=f"setting_setspamcount_{group_id}_20")],
+            [InlineKeyboardButton("🔙 Back", callback_data=f"setting_spam_{group_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"✏️ *Edit Spam Threshold*\n\n"
+            f"Current: {current_threshold} messages in 10 seconds\n\n"
+            f"Select new value:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
+        )
+    
+    elif action == "setspamcount":
+        if len(parts) >= 4:
+            new_threshold = int(parts[3])
+            update_group_setting(group_id, "spam_threshold", new_threshold)
+            await query.answer(f"✅ Spam threshold set to {new_threshold}!")
+            
+            # Go back to spam menu
+            current = get_group_setting(group_id, "spam_protection")
+            keyboard = [
+                [InlineKeyboardButton(f"✏️ Edit Threshold: {new_threshold} msgs", callback_data=f"setting_editspamcount_{group_id}")],
+                [InlineKeyboardButton(f"Delete Admin Spam: {'✅' if get_group_setting(group_id, 'delete_admin_spam') else '❌'}", callback_data=f"setting_adminspam_{group_id}")],
+                [InlineKeyboardButton("🔙 Back", callback_data=f"setting_menu_{group_id}")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                f"🛡️ *Spam Protection*\n\n"
+                f"Status: {'✅ ENABLED' if current else '❌ DISABLED'}\n\n"
+                f"Threshold: {new_threshold} messages in 10 seconds\n\n"
+                f"Click ✏️ button to change threshold.",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=reply_markup
+            )
         
     elif action == "adminspam":
         current = get_group_setting(group_id, "delete_admin_spam")
         update_group_setting(group_id, "delete_admin_spam", not current)
         await query.answer(f"Admin spam deletion {'enabled' if not current else 'disabled'}!")
         
+        # Refresh spam menu
+        spam_enabled = get_group_setting(group_id, "spam_protection")
         keyboard = [
-            [InlineKeyboardButton(f"Threshold: {get_group_setting(group_id, 'spam_threshold')} msgs", callback_data=f"setting_spamcount_{group_id}")],
+            [InlineKeyboardButton(f"✏️ Edit Threshold: {get_group_setting(group_id, 'spam_threshold')} msgs", callback_data=f"setting_editspamcount_{group_id}")],
             [InlineKeyboardButton(f"Delete Admin Spam: {'✅' if not current else '❌'}", callback_data=f"setting_adminspam_{group_id}")],
             [InlineKeyboardButton("🔙 Back", callback_data=f"setting_menu_{group_id}")]
         ]
