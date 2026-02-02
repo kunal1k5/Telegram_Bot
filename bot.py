@@ -2348,38 +2348,32 @@ async def thankyou_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def hug_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /hug command"""
+    """Handle /hug command - AI generated warm hug messages"""
     await _register_user(update.effective_user.id)
     user_name = update.effective_user.first_name or "Bhai"
     
-    hug_messages = [
-        f"🤗 *gives tight hug to {user_name}*\nAww! Feel better? ❤️",
-        f"*hugs {user_name} warmly* 🤗\nYou needed this! Everything will be okay! 💕",
-        f"🤗 Aaaja {user_name}! *virtual hug*\nYou're amazing! ❤️",
-        f"*squeezes {user_name} in a hug* 🤗💖\nFeeling the warmth? Main hoon na! 😊"
-    ]
+    # Send typing action
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
-    await update.effective_message.reply_text(random.choice(hug_messages))
+    # Get AI-generated hug message
+    hug_prompt = f"Give a warm, caring virtual hug message to {user_name} in Hinglish (mix of Hindi and English). Make it cute, supportive and comforting. Keep it short (1-2 lines). Use hug emojis 🤗 and heart emojis ❤️."
+    ai_hug = get_ai_response(hug_prompt, user_name, hug_prompt)
+    
+    await update.effective_message.reply_text(ai_hug)
 
 
 async def tip_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /tip command - Daily life tips"""
+    """Handle /tip command - AI generated daily life tips"""
     await _register_user(update.effective_user.id)
     
-    tips = [
-        "💡 *Daily Tip*\nSubah jaldi utho! Morning productivity best hoti hai ☀️",
-        "💡 *Daily Tip*\nPaani zyada piyo! 8-10 glass must hai 💧",
-        "💡 *Daily Tip*\nScreen time kam karo, eyes ko rest do 👀✨",
-        "💡 *Daily Tip*\n5 minutes meditation daily - game changer hai 🧘",
-        "💡 *Daily Tip*\nTo-do list banao! Organized life = peaceful life 📝",
-        "💡 *Daily Tip*\nWalk karo daily! 30 minutes is enough 🚶",
-        "💡 *Daily Tip*\nBooks padho! Knowledge is power 📚",
-        "💡 *Daily Tip*\nPositive sochao! Negativity se door raho ✨",
-        "💡 *Daily Tip*\nFamily time zaruri hai! Quality time spend karo ❤️",
-        "💡 *Daily Tip*\nGratitude practice karo! Thank you bolo daily 🙏"
-    ]
+    # Send typing action
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
-    await update.effective_message.reply_text(random.choice(tips), parse_mode=ParseMode.MARKDOWN)
+    # Get AI-generated tip
+    tip_prompt = "Share a practical, useful daily life tip in Hinglish (mix of Hindi and English). Keep it short (2 lines), actionable, and motivational. Add emojis. Start with '💡 Daily Tip:'."
+    ai_tip = get_ai_response(tip_prompt, "User", tip_prompt)
+    
+    await update.effective_message.reply_text(ai_tip, parse_mode=ParseMode.MARKDOWN)
 
 
 async def confidence_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2478,106 +2472,74 @@ async def lifeline_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def joke_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /joke command"""
+    """Handle /joke command - AI generated jokes"""
     await _register_user(update.effective_user.id)
     
-    jokes = [
-        "😄 *Joke*\nTeacher: Beta, tumhare phone mein calculator hai?\nStudent: Haan!\nTeacher: Toh homework mein 2+2 galat kaise? 😂",
-        
-        "😄 *Joke*\nDoctor: Aapko diabetes hai\nPatient: Okay, koi baat nahi\nDoctor: Sugar kam karo\nPatient: WHAT? 😱",
-        
-        "😄 *Joke*\nWife: Tum mujhe pyaar karte ho?\nHusband: Haan\nWife: Kitna?\nHusband: Jitna WiFi ka password yaad hai! 😂",
-        
-        "😄 *Joke*\nBeta: Papa, main fail ho gaya\nPapa: Koi baat nahi, agli baar pass ho jaoge\nBeta: Next week dobara exam hai\nPapa: 😱",
-        
-        "😄 *Joke*\nBoy: I love you\nGirl: Proof do\nBoy: *Screenshot of WhatsApp chat*\nGirl: 😂",
-        
-        "😄 *Joke*\nTeacher: 'I' ke baad 'am' aata hai\nStudent: I aam?\nTeacher: No! I am\nStudent: You're aam? 🥭😂",
-        
-        "😄 *Joke*\nPapa: Beta, bill zyada aa raha hai\nBeta: Light band kar dete hain\nPapa: *turns off son's phone data* 😂",
-        
-        "😄 *Joke*\nGF: Mujhe gift do\nBF: *gives hug* 🤗\nGF: I said gift, not shift! 😂"
-    ]
+    # Send typing action
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
-    await update.effective_message.reply_text(random.choice(jokes), parse_mode=ParseMode.MARKDOWN)
+    # Get AI-generated joke
+    joke_prompt = "Generate a funny, family-friendly joke in Hinglish (mix of Hindi and English). Keep it short (2-4 lines), witty, and relatable to everyday life. Add emojis. Start with '😄 Joke:'."
+    ai_joke = get_ai_response(joke_prompt, "User", joke_prompt)
+    
+    await update.effective_message.reply_text(ai_joke, parse_mode=ParseMode.MARKDOWN)
 
 
 async def roast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /roast command - Light roasting"""
+    """Handle /roast command - AI generated light roasting"""
     await _register_user(update.effective_user.id)
     user_name = update.effective_user.first_name or "Bhai"
     
-    roasts = [
-        f"Arre {user_name}! 😂 Tum itne smart ho ki Google bhi confused ho jata hai! 🤭",
-        f"{user_name}, tumhari productivity dekh ke snail bhi motivation lete hain! 😄🐌",
-        f"Oye {user_name}! 😂 Tumhari WiFi speed aur tumhare replies same hai - slow! 🤭",
-        f"{user_name}, tum itne late aate ho ki 'Better late than never' bhi doubt karta hai! 😂",
-        f"Arre {user_name}! 🤭 Tumhare excuses itne creative hain ki Netflix ko scripts de sakte ho! 😄",
-        f"{user_name}, tumhara phone battery aur tumhari energy level same hai - always low! 😂🔋"
-    ]
+    # Send typing action
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
-    await update.effective_message.reply_text(random.choice(roasts))
+    # Get AI-generated roast
+    roast_prompt = f"Give a funny, light-hearted roast to {user_name} in Hinglish (mix of Hindi and English). Keep it playful, not offensive. Make it witty and funny (1-2 lines). Use laughing emojis 😂🤭."
+    ai_roast = get_ai_response(roast_prompt, user_name, roast_prompt)
+    
+    await update.effective_message.reply_text(ai_roast)
 
 
 async def truth_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /truth command"""
+    """Handle /truth command - AI generated truth questions"""
     await _register_user(update.effective_user.id)
     
-    truths = [
-        "🎯 *Truth Question*\nKya tumne kabhi kisi ko secretly like kiya hai? 😳",
-        "🎯 *Truth Question*\nTumhari sabse embarrassing moment kya thi? 🙈",
-        "🎯 *Truth Question*\nKya tumne kabhi kisi ki copy ki hai exam mein? 📝😅",
-        "🎯 *Truth Question*\nTumhara crush kaun hai? (Honest answer!) 💕",
-        "🎯 *Truth Question*\nKya tumne kabhi kisi ko jhooth bola hai? 🤥",
-        "🎯 *Truth Question*\nTumhari secret talent kya hai? 🎭",
-        "🎯 *Truth Question*\nKya tumne kabhi raat mein khana chori kiya hai? 😂🍕",
-        "🎯 *Truth Question*\nTumhara biggest fear kya hai? 😨"
-    ]
+    # Send typing action
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
-    await update.effective_message.reply_text(random.choice(truths), parse_mode=ParseMode.MARKDOWN)
+    # Get AI-generated truth question
+    truth_prompt = "Generate a fun, interesting 'Truth' question for Truth or Dare game in Hinglish (mix of Hindi and English). Keep it short (1-2 lines), appropriate, and interesting. Add emojis. Start with '🎯 Truth Question:'."
+    ai_truth = get_ai_response(truth_prompt, "User", truth_prompt)
+    
+    await update.effective_message.reply_text(ai_truth, parse_mode=ParseMode.MARKDOWN)
 
 
 async def dare_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /dare command"""
+    """Handle /dare command - AI generated dare challenges"""
     await _register_user(update.effective_user.id)
     
-    dares = [
-        "🎲 *Dare*\nApne crush ko 'Hi' message bhejo! 😄💕",
-        "🎲 *Dare*\n5 jumping jacks kar ke proof video bhejo! 💪",
-        "🎲 *Dare*\nApni best friend ko funny voice note bhejo! 🎤😂",
-        "🎲 *Dare*\nNext 10 minutes phone band rakho! 📵",
-        "🎲 *Dare*\nApni favorite song gao aur audio bhejo! 🎵",
-        "🎲 *Dare*\nKisi ko random compliment do! 💕",
-        "🎲 *Dare*\n10 push-ups karo! Right now! 💪",
-        "🎲 *Dare*\nApni weirdest photo share karo! 📸😂"
-    ]
+    # Send typing action
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
-    await update.effective_message.reply_text(random.choice(dares), parse_mode=ParseMode.MARKDOWN)
+    # Get AI-generated dare
+    dare_prompt = "Generate a fun, exciting 'Dare' challenge for Truth or Dare game in Hinglish (mix of Hindi and English). Keep it short (1-2 lines), safe, appropriate, and fun. Add emojis. Start with '🎲 Dare:'."
+    ai_dare = get_ai_response(dare_prompt, "User", dare_prompt)
+    
+    await update.effective_message.reply_text(ai_dare, parse_mode=ParseMode.MARKDOWN)
 
 
 async def fact_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /fact command - Interesting facts"""
+    """Handle /fact command - AI generated interesting facts"""
     await _register_user(update.effective_user.id)
     
-    facts = [
-        "🌟 *Interesting Fact*\nHoney kabhi kharab nahi hoti! 3000 saal purana honey bhi edible hai 🍯",
-        "🌟 *Amazing Fact*\nDolphins apna naam rakhti hain aur ek-dusre ko naam se bulati hain! 🐬💕",
-        "🌟 *Mind-Blowing Fact*\nEk cloud ka weight approximately 1.1 million pounds hota hai! ☁️",
-        "🌟 *Cool Fact*\nOctopus ke teen hearts hote hain! 🐙❤️❤️❤️",
-        "🌟 *Fascinating Fact*\nBananas technically berries hain, but strawberries nahi! 🍌🍓",
-        "🌟 *Incredible Fact*\nHumans aur bananas 60% DNA share karte hain! 🧬🍌",
-        "🌟 *Wonderful Fact*\nEiffel Tower summer mein 6 inches tall ho jata hai heat se! 🗼☀️",
-        "🌟 *Surprising Fact*\nPenguins propose karte hain by giving pebbles! 🐧💍",
-        "🌟 *Beautiful Fact*\nButterflies taste with their feet! 🦋👣",
-        "🌟 *Amazing Fact*\nShark dinosaurs se bhi pehle exist karte the! 🦈🦕",
-        "🌟 *Crazy Fact*\nEk teaspoon neutron star ka weight 6 billion tons hoga! ⭐",
-        "🌟 *Interesting Fact*\nKoala fingerprints humans se identical hote hain! 🐨👆",
-        "🌟 *Fun Fact*\nCats 70% of their life sleeping mein spend karte hain! 😺😴",
-        "🌟 *Cool Fact*\nWater bear (tardigrade) space mein survive kar sakta hai! 🐻",
-        "🌟 *Awesome Fact*\nHummingbird backwards fly kar sakta hai! 🐦✨"
-    ]
+    # Send typing action
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
-    await update.effective_message.reply_text(random.choice(facts), parse_mode=ParseMode.MARKDOWN)
+    # Get AI-generated fact
+    fact_prompt = "Share an amazing, interesting, or mind-blowing fact in Hinglish (mix of Hindi and English). Keep it short (2-3 lines), fascinating, and educational. Add emojis. Start with '🌟 Interesting Fact:'."
+    ai_fact = get_ai_response(fact_prompt, "User", fact_prompt)
+    
+    await update.effective_message.reply_text(ai_fact, parse_mode=ParseMode.MARKDOWN)
 
 
 # ========================= ADMIN MODERATION COMMANDS ========================= #
