@@ -57,9 +57,9 @@ if GEMINI_API_KEY:
 
 # Model fallback order (most stable first)
 GEMINI_MODELS: Final[list[str]] = [
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-latest",
-    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
+    "gemini-pro",
 ]
 GEMINI_MODEL_CACHE: list[str] = []
 
@@ -903,13 +903,32 @@ def get_ai_response(
     system_prompt: Optional[str] = None,
 ) -> str:
     """Prefer OpenRouter, then OpenAI, then fall back to Gemini."""
-    openrouter_text = get_openrouter_response(user_message, user_name, system_prompt)
-    if openrouter_text:
-        return openrouter_text
-    openai_text = get_openai_response(user_message, user_name, system_prompt)
-    if openai_text:
-        return openai_text
-    return get_gemini_response(user_message, user_name, system_prompt)
+    logger.info(f"🔄 Trying API responses for message from {user_name}...")
+    
+    if OPENROUTER_API_KEY:
+        logger.info("📡 Trying OpenRouter API...")
+        openrouter_text = get_openrouter_response(user_message, user_name, system_prompt)
+        if openrouter_text:
+            logger.info("✅ OpenRouter succeeded")
+            return openrouter_text
+        logger.warning("⚠️ OpenRouter returned None")
+    else:
+        logger.debug("⏭️ Skipping OpenRouter (no API key)")
+    
+    if OPENAI_API_KEY:
+        logger.info("📡 Trying OpenAI API...")
+        openai_text = get_openai_response(user_message, user_name, system_prompt)
+        if openai_text:
+            logger.info("✅ OpenAI succeeded")
+            return openai_text
+        logger.warning("⚠️ OpenAI returned None")
+    else:
+        logger.debug("⏭️ Skipping OpenAI (no API key)")
+    
+    logger.info("📡 Falling back to Gemini API...")
+    gemini_text = get_gemini_response(user_message, user_name, system_prompt)
+    logger.info(f"Gemini response length: {len(gemini_text) if gemini_text else 0} chars")
+    return gemini_text
 
 def get_gemini_response(user_message: str, user_name: str = "User", system_prompt: Optional[str] = None) -> str:
     """
