@@ -115,7 +115,7 @@ async def get_gemini_response(user_message: str, user_name: str, system_prompt: 
         return None
 
 async def get_ai_response(user_message: str, user_name: str, language: str = "hinglish") -> str:
-    """Get AI response (tries OpenRouter first, then Gemini)"""
+    """Get AI response using OpenRouter only"""
     # Add language instruction
     lang_instruction = ""
     if language == "english":
@@ -125,29 +125,16 @@ async def get_ai_response(user_message: str, user_name: str, language: str = "hi
     
     system_prompt = f"{SYSTEM_PROMPT}{lang_instruction}"
     
-    # Try OpenRouter first
+    # Try OpenRouter only
     openrouter_reply = await get_openrouter_response(user_message, user_name, system_prompt)
     if openrouter_reply:
         return openrouter_reply
     
-    # Fallback to Gemini
-    gemini_reply = await get_gemini_response(user_message, user_name, system_prompt)
-    if gemini_reply:
-        return gemini_reply
-    
-    # Final fallback
+    # If OpenRouter fails, return error
     if language == "english":
-        return random.choice([
-            "Hey! I'm here ❤️",
-            "Yes? Tell me! 🥰",
-            "I'm listening! ✨"
-        ])
+        return "OpenRouter API error. Please try again."
     else:
-        return random.choice([
-            "Haan bolo? ❤️",
-            "Kya hua? 🥰",
-            "Mai sun rahi hoon! ✨"
-        ])
+        return "OpenRouter API mein problem ho raha hai. Phir se try karna!"
 
 # ============== START COMMAND ==============
 @app.on_message(filters.command("start") & filters.private)

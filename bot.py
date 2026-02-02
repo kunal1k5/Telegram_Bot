@@ -45,15 +45,15 @@ OPENAI_MODEL: Final[str] = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable not set!")
-if not GEMINI_API_KEY and not OPENROUTER_API_KEY and not OPENAI_API_KEY:
+if not OPENROUTER_API_KEY:
     raise ValueError(
-        "No AI API key set! Provide GEMINI_API_KEY, OPENROUTER_API_KEY, or OPENAI_API_KEY."
+        "OPENROUTER_API_KEY environment variable not set! This is required for the bot to function."
     )
 
-# Configure Gemini AI client (only if key is provided)
-GEMINI_CLIENT: Optional[genai.Client] = None
-if GEMINI_API_KEY:
-    GEMINI_CLIENT = genai.Client(api_key=GEMINI_API_KEY)
+# Gemini is no longer used - using OpenRouter only
+# GEMINI_CLIENT: Optional[genai.Client] = None
+# if GEMINI_API_KEY:
+#     GEMINI_CLIENT = genai.Client(api_key=GEMINI_API_KEY)
 
 # Model fallback order (most stable first)
 GEMINI_MODELS: Final[list[str]] = [
@@ -902,33 +902,23 @@ def get_ai_response(
     user_name: str = "User",
     system_prompt: Optional[str] = None,
 ) -> str:
-    """Prefer OpenRouter, then OpenAI, then fall back to Gemini."""
-    logger.info(f"🔄 Trying API responses for message from {user_name}...")
+    """Use OpenRouter API only."""
+    logger.info(f"🔄 Processing message from {user_name}...")
     
-    if OPENROUTER_API_KEY:
-        logger.info("📡 Trying OpenRouter API...")
-        openrouter_text = get_openrouter_response(user_message, user_name, system_prompt)
-        if openrouter_text:
-            logger.info("✅ OpenRouter succeeded")
-            return openrouter_text
-        logger.warning("⚠️ OpenRouter returned None")
+    if not OPENROUTER_API_KEY:
+        error_msg = "❌ OpenRouter API key not configured!"
+        logger.error(error_msg)
+        return "OpenRouter API key not configured. Please set OPENROUTER_API_KEY environment variable."
+    
+    logger.info("📡 Calling OpenRouter API...")
+    openrouter_text = get_openrouter_response(user_message, user_name, system_prompt)
+    
+    if openrouter_text:
+        logger.info(f"✅ OpenRouter succeeded: {len(openrouter_text)} chars")
+        return openrouter_text
     else:
-        logger.debug("⏭️ Skipping OpenRouter (no API key)")
-    
-    if OPENAI_API_KEY:
-        logger.info("📡 Trying OpenAI API...")
-        openai_text = get_openai_response(user_message, user_name, system_prompt)
-        if openai_text:
-            logger.info("✅ OpenAI succeeded")
-            return openai_text
-        logger.warning("⚠️ OpenAI returned None")
-    else:
-        logger.debug("⏭️ Skipping OpenAI (no API key)")
-    
-    logger.info("📡 Falling back to Gemini API...")
-    gemini_text = get_gemini_response(user_message, user_name, system_prompt)
-    logger.info(f"Gemini response length: {len(gemini_text) if gemini_text else 0} chars")
-    return gemini_text
+        logger.error("❌ OpenRouter API returned empty response")
+        return "Sorry, couldn't get a response from OpenRouter. Please try again."
 
 def get_gemini_response(user_message: str, user_name: str = "User", system_prompt: Optional[str] = None) -> str:
     """
