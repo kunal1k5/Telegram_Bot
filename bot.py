@@ -3218,25 +3218,26 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         GROUP_SETTINGS[group_id] = DEFAULT_GROUP_SETTINGS.copy()
         _save_group_settings(GROUP_SETTINGS)
     
-    # Create settings menu
+    # Create category-based settings menu (like Rose Bot)
     keyboard = [
-        [InlineKeyboardButton("🗑️ Auto Delete Messages", callback_data=f"setting_autodel_{group_id}")],
-        [InlineKeyboardButton("🛡️ Spam Protection", callback_data=f"setting_spam_{group_id}")],
-        [InlineKeyboardButton("🎭 Stickers", callback_data=f"setting_stickers_{group_id}")],
-        [InlineKeyboardButton("🎬 GIFs", callback_data=f"setting_gifs_{group_id}")],
-        [InlineKeyboardButton("🔗 Links", callback_data=f"setting_links_{group_id}")],
-        [InlineKeyboardButton("↪️ Forwards", callback_data=f"setting_forwards_{group_id}")],
-        [InlineKeyboardButton("👋 Welcome Message", callback_data=f"setting_welcome_{group_id}")],
-        [InlineKeyboardButton("🚫 Anti-Flood", callback_data=f"setting_antiflood_{group_id}")],
-        [InlineKeyboardButton("📊 View All Settings", callback_data=f"setting_view_{group_id}")],
-        [InlineKeyboardButton("❌ Close", callback_data="setting_close")]
+        [InlineKeyboardButton("🗑️ Message Management", callback_data=f"setting_cat_messages_{group_id}"),
+         InlineKeyboardButton("🛡️ Security", callback_data=f"setting_cat_security_{group_id}")],
+        [InlineKeyboardButton("📋 Content Control", callback_data=f"setting_cat_content_{group_id}"),
+         InlineKeyboardButton("👋 Notifications", callback_data=f"setting_cat_notify_{group_id}")],
+        [InlineKeyboardButton("📊 View All", callback_data=f"setting_view_{group_id}"),
+         InlineKeyboardButton("❌ Close", callback_data="setting_close")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.effective_message.reply_text(
         "⚙️ *Group Settings - Baby Bot* ❤️\n\n"
-        "Apne group ke settings customize karo! 🎨\n"
-        "Kisi bhi option pe click karo change karne ke liye:",
+        "Apne group ke settings customize karo! 🎨\n\n"
+        "*Categories:*\n"
+        "🗑️ *Message Management* - Auto-delete messages\n"
+        "🛡️ *Security* - Spam & anti-flood protection\n"
+        "📋 *Content Control* - Stickers, GIFs, links, forwards\n"
+        "👋 *Notifications* - Welcome messages\n\n"
+        "Kisi bhi category pe click karo! 👇",
         reply_markup=reply_markup,
         parse_mode=ParseMode.MARKDOWN
     )
@@ -3296,30 +3297,99 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
     # Back to menu
     if action == "menu":
         keyboard = [
-            [InlineKeyboardButton("🗑️ Auto Delete Messages", callback_data=f"setting_autodel_{group_id}")],
-            [InlineKeyboardButton("🛡️ Spam Protection", callback_data=f"setting_spam_{group_id}")],
-            [InlineKeyboardButton("🎭 Stickers", callback_data=f"setting_stickers_{group_id}")],
-            [InlineKeyboardButton("🎬 GIFs", callback_data=f"setting_gifs_{group_id}")],
-            [InlineKeyboardButton("🔗 Links", callback_data=f"setting_links_{group_id}")],
-            [InlineKeyboardButton("↪️ Forwards", callback_data=f"setting_forwards_{group_id}")],
-            [InlineKeyboardButton("👋 Welcome Message", callback_data=f"setting_welcome_{group_id}")],
-            [InlineKeyboardButton("🚫 Anti-Flood", callback_data=f"setting_antiflood_{group_id}")],
-            [InlineKeyboardButton("📊 View All Settings", callback_data=f"setting_view_{group_id}")],
-            [InlineKeyboardButton("❌ Close", callback_data="setting_close")]
+            [InlineKeyboardButton("🗑️ Message Management", callback_data=f"setting_cat_messages_{group_id}"),
+             InlineKeyboardButton("🛡️ Security", callback_data=f"setting_cat_security_{group_id}")],
+            [InlineKeyboardButton("📋 Content Control", callback_data=f"setting_cat_content_{group_id}"),
+             InlineKeyboardButton("👋 Notifications", callback_data=f"setting_cat_notify_{group_id}")],
+            [InlineKeyboardButton("📊 View All", callback_data=f"setting_view_{group_id}"),
+             InlineKeyboardButton("❌ Close", callback_data="setting_close")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
             "⚙️ *Group Settings - Baby Bot* ❤️\n\n"
-            "Apne group ke settings customize karo! 🎨\n"
-            "Kisi bhi option pe click karo change karne ke liye:",
+            "Apne group ke settings customize karo! 🎨\n\n"
+            "*Categories:*\n"
+            "🗑️ *Message Management* - Auto-delete messages\n"
+            "🛡️ *Security* - Spam & anti-flood protection\n"
+            "📋 *Content Control* - Stickers, GIFs, links, forwards\n"
+            "👋 *Notifications* - Welcome messages\n\n"
+            "Kisi bhi category pe click karo! 👇",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    
+    # Category: Message Management
+    if action == "cat" and parts[2] == "messages":
+        keyboard = [
+            [InlineKeyboardButton("🗑️ Auto Delete", callback_data=f"setting_autodel_{group_id}")],
+            [InlineKeyboardButton("📏 Max Message Length", callback_data=f"setting_maxlen_{group_id}")],
+            [InlineKeyboardButton("🔙 Back to Categories", callback_data=f"setting_menu_{group_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            "🗑️ *Message Management Settings*\n\n"
+            "Messages ke saath kaise handle kare:",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    
+    # Category: Security
+    if action == "cat" and parts[2] == "security":
+        keyboard = [
+            [InlineKeyboardButton("🛡️ Spam Protection", callback_data=f"setting_spam_{group_id}")],
+            [InlineKeyboardButton("🚫 Anti-Flood", callback_data=f"setting_antiflood_{group_id}")],
+            [InlineKeyboardButton("🔙 Back to Categories", callback_data=f"setting_menu_{group_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            "🛡️ *Security Settings*\n\n"
+            "Group ko spam aur flood se protect karo:",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    
+    # Category: Content Control
+    if action == "cat" and parts[2] == "content":
+        keyboard = [
+            [InlineKeyboardButton("🎭 Stickers", callback_data=f"setting_stickers_{group_id}"),
+             InlineKeyboardButton("🎬 GIFs", callback_data=f"setting_gifs_{group_id}")],
+            [InlineKeyboardButton("🔗 Links", callback_data=f"setting_links_{group_id}"),
+             InlineKeyboardButton("↪️ Forwards", callback_data=f"setting_forwards_{group_id}")],
+            [InlineKeyboardButton("🔙 Back to Categories", callback_data=f"setting_menu_{group_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            "📋 *Content Control Settings*\n\n"
+            "Kya content allow karni hai:",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    
+    # Category: Notifications
+    if action == "cat" and parts[2] == "notify":
+        keyboard = [
+            [InlineKeyboardButton("👋 Welcome Message", callback_data=f"setting_welcome_{group_id}")],
+            [InlineKeyboardButton("🔙 Back to Categories", callback_data=f"setting_menu_{group_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            "👋 *Notification Settings*\n\n"
+            "Group notifications manage karo:",
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
         return
     
     # Toggle settings
-    current_value = get_group_setting(group_id, "")
     
     if action == "autodel":
         current = get_group_setting(group_id, "auto_delete_enabled")
