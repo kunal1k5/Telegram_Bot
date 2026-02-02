@@ -150,6 +150,69 @@ OPTED_OUT_USERS: Set[int] = _load_opted_out_users()
 # Language preferences per user: {user_id: "hindi" | "english" | "hinglish"}
 LANGUAGE_PREFERENCES: Dict[int, str] = {}
 
+# ========================= GROUP SETTINGS SYSTEM ========================= #
+
+GROUP_SETTINGS_FILE: Final[Path] = Path("group_settings.json")
+
+# Default group settings
+DEFAULT_GROUP_SETTINGS = {
+    "auto_delete_enabled": False,
+    "auto_delete_count": 100,  # Delete after this many messages
+    "spam_protection": True,
+    "spam_threshold": 5,  # Messages in 10 seconds = spam
+    "delete_admin_spam": False,  # Don't delete admin spam by default
+    "allow_stickers": True,
+    "allow_gifs": True,
+    "allow_links": True,
+    "allow_forwards": True,
+    "welcome_message": True,
+    "antiflood_enabled": True,
+    "max_message_length": 4000,
+}
+
+def _load_group_settings() -> Dict[int, Dict[str, Any]]:
+    """Load group settings from JSON file"""
+    try:
+        if GROUP_SETTINGS_FILE.exists():
+            with open(GROUP_SETTINGS_FILE, "r") as f:
+                data = json.load(f)
+                # Convert string keys back to int
+                return {int(k): v for k, v in data.items()}
+    except Exception as e:
+        logger.warning(f"Could not load group settings: {e}")
+    return {}
+
+def _save_group_settings(settings_data: Dict[int, Dict[str, Any]]) -> None:
+    """Save group settings to JSON file"""
+    try:
+        with open(GROUP_SETTINGS_FILE, "w") as f:
+            json.dump(settings_data, f, indent=2)
+    except Exception as e:
+        logger.error(f"Could not save group settings: {e}")
+
+def get_group_setting(group_id: int, setting_key: str) -> Any:
+    """Get a specific group setting, returns default if not set"""
+    if group_id not in GROUP_SETTINGS:
+        GROUP_SETTINGS[group_id] = DEFAULT_GROUP_SETTINGS.copy()
+        _save_group_settings(GROUP_SETTINGS)
+    return GROUP_SETTINGS[group_id].get(setting_key, DEFAULT_GROUP_SETTINGS.get(setting_key))
+
+def update_group_setting(group_id: int, setting_key: str, value: Any) -> None:
+    """Update a specific group setting"""
+    if group_id not in GROUP_SETTINGS:
+        GROUP_SETTINGS[group_id] = DEFAULT_GROUP_SETTINGS.copy()
+    GROUP_SETTINGS[group_id][setting_key] = value
+    _save_group_settings(GROUP_SETTINGS)
+
+# In-memory group settings
+GROUP_SETTINGS: Dict[int, Dict[str, Any]] = _load_group_settings()
+
+# Track message count per group for auto-delete
+GROUP_MESSAGE_COUNTS: Dict[int, int] = {}
+
+# Track spam per user per group: {group_id: {user_id: [timestamps]}}
+SPAM_TRACKER: Dict[int, Dict[int, List[float]]] = {}
+
 # ========================= GROUP TRACKING SYSTEM ========================= #
 
 GROUPS_DB_FILE: Final[Path] = Path("groups_database.json")
@@ -749,6 +812,12 @@ HELP_TEXT: Final[str] = """
 *Group Commands (Admin only):*
 /all <message> - Sabko tag karo
 @all <message> - Quick tag
+/settings - Group settings change karo ⚙️
+
+*Admin Commands:*
+/admin - Admin commands dekho 👮
+/del - Message delete karo
+/ban, /kick, /mute - User manage karo
 
 *How to use:*
 • *Private Chat:* Bas message karo ya commands use karo!
@@ -3064,6 +3133,10 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     admin_help_text = (
         "👮‍♂️ *Admin Commands* - Baby ❤️\n\n"
         
+        "⚙️ /settings\n"
+        "→ Group settings customize karo\n"
+        "→ Auto-delete, spam protection, etc.\n\n"
+        
         "🗑️ /del\n"
         "→ Reply karke message delete karo\n\n"
         
@@ -3103,12 +3176,259 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     logger.info(f"Admin help shown to {update.effective_user.first_name}")
 
 
+# ========================= GROUP SETTINGS COMMANDS ========================= #
+
+async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /settings command - Show group settings menu (admin only)"""
+    await _register_user(update.effective_user.id)
+    
+    # Must be in a group
+    if update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        await update.effective_message.reply_text(
+            "❌ Ye command sirf groups mein kaam karta hai! 😊"
+        )
+        return
+    
+    # Check if user is admin
+    try:
+        user_member = await context.bot.get_chat_member(
+            update.effective_chat.id,
+            update.effective_user.id
+        )
+        
+        if user_member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
+            await update.effective_message.reply_text(
+                "❌ Sirf admins hi group settings change kar sakte hain! 😊"
+            )
+            return
+    except Exception as e:
+        logger.error(f"Admin check error: {e}")
+        await update.effective_message.reply_text(
+            "❌ Permission check mein problem aa gayi! 😅"
+        )
+        return
+    
+    group_id = update.effective_chat.id
+    
+    # Initialize settings if not exists
+    if group_id not in GROUP_SETTINGS:
+        GROUP_SETTINGS[group_id] = DEFAULT_GROUP_SETTINGS.copy()
+        _save_group_settings(GROUP_SETTINGS)
+    
+    # Create settings menu
+    keyboard = [
+        [InlineKeyboardButton("🗑️ Auto Delete Messages", callback_data=f"setting_autodel_{group_id}")],
+        [InlineKeyboardButton("🛡️ Spam Protection", callback_data=f"setting_spam_{group_id}")],
+        [InlineKeyboardButton("🎭 Stickers", callback_data=f"setting_stickers_{group_id}")],
+        [InlineKeyboardButton("🎬 GIFs", callback_data=f"setting_gifs_{group_id}")],
+        [InlineKeyboardButton("🔗 Links", callback_data=f"setting_links_{group_id}")],
+        [InlineKeyboardButton("↪️ Forwards", callback_data=f"setting_forwards_{group_id}")],
+        [InlineKeyboardButton("👋 Welcome Message", callback_data=f"setting_welcome_{group_id}")],
+        [InlineKeyboardButton("🚫 Anti-Flood", callback_data=f"setting_antiflood_{group_id}")],
+        [InlineKeyboardButton("📊 View All Settings", callback_data=f"setting_view_{group_id}")],
+        [InlineKeyboardButton("❌ Close", callback_data="setting_close")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.effective_message.reply_text(
+        "⚙️ *Group Settings - Baby Bot* ❤️\n\n"
+        "Apne group ke settings customize karo! 🎨\n"
+        "Kisi bhi option pe click karo change karne ke liye:",
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+
 # ========================= CALLBACK HANDLERS ========================= #
+
+async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle group settings callbacks"""
+    query = update.callback_query
+    data = query.data
+    
+    if data == "setting_close":
+        await query.message.delete()
+        return
+    
+    # Extract setting type and group_id
+    parts = data.split("_")
+    if len(parts) < 3:
+        return
+    
+    action = parts[1]
+    group_id = int(parts[2]) if parts[2].lstrip('-').isdigit() else 0
+    
+    if not group_id:
+        return
+    
+    # View all settings
+    if action == "view":
+        settings = GROUP_SETTINGS.get(group_id, DEFAULT_GROUP_SETTINGS)
+        settings_text = (
+            f"📋 *Current Settings* for this group:\n\n"
+            f"🗑️ Auto Delete: {'✅ ON' if settings['auto_delete_enabled'] else '❌ OFF'} "
+            f"(after {settings['auto_delete_count']} msgs)\n"
+            f"🛡️ Spam Protection: {'✅ ON' if settings['spam_protection'] else '❌ OFF'} "
+            f"(threshold: {settings['spam_threshold']} msgs)\n"
+            f"   └─ Delete Admin Spam: {'✅ YES' if settings['delete_admin_spam'] else '❌ NO'}\n"
+            f"🎭 Stickers: {'✅ Allowed' if settings['allow_stickers'] else '❌ Not Allowed'}\n"
+            f"🎬 GIFs: {'✅ Allowed' if settings['allow_gifs'] else '❌ Not Allowed'}\n"
+            f"🔗 Links: {'✅ Allowed' if settings['allow_links'] else '❌ Not Allowed'}\n"
+            f"↪️ Forwards: {'✅ Allowed' if settings['allow_forwards'] else '❌ Not Allowed'}\n"
+            f"👋 Welcome Message: {'✅ ON' if settings['welcome_message'] else '❌ OFF'}\n"
+            f"🚫 Anti-Flood: {'✅ ON' if settings['antiflood_enabled'] else '❌ OFF'}\n"
+            f"📏 Max Message Length: {settings['max_message_length']} chars"
+        )
+        
+        keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data=f"setting_menu_{group_id}")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            settings_text,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
+        )
+        return
+    
+    # Back to menu
+    if action == "menu":
+        keyboard = [
+            [InlineKeyboardButton("🗑️ Auto Delete Messages", callback_data=f"setting_autodel_{group_id}")],
+            [InlineKeyboardButton("🛡️ Spam Protection", callback_data=f"setting_spam_{group_id}")],
+            [InlineKeyboardButton("🎭 Stickers", callback_data=f"setting_stickers_{group_id}")],
+            [InlineKeyboardButton("🎬 GIFs", callback_data=f"setting_gifs_{group_id}")],
+            [InlineKeyboardButton("🔗 Links", callback_data=f"setting_links_{group_id}")],
+            [InlineKeyboardButton("↪️ Forwards", callback_data=f"setting_forwards_{group_id}")],
+            [InlineKeyboardButton("👋 Welcome Message", callback_data=f"setting_welcome_{group_id}")],
+            [InlineKeyboardButton("🚫 Anti-Flood", callback_data=f"setting_antiflood_{group_id}")],
+            [InlineKeyboardButton("📊 View All Settings", callback_data=f"setting_view_{group_id}")],
+            [InlineKeyboardButton("❌ Close", callback_data="setting_close")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            "⚙️ *Group Settings - Baby Bot* ❤️\n\n"
+            "Apne group ke settings customize karo! 🎨\n"
+            "Kisi bhi option pe click karo change karne ke liye:",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    
+    # Toggle settings
+    current_value = get_group_setting(group_id, "")
+    
+    if action == "autodel":
+        current = get_group_setting(group_id, "auto_delete_enabled")
+        update_group_setting(group_id, "auto_delete_enabled", not current)
+        
+        keyboard = [
+            [InlineKeyboardButton(f"Message Count: {get_group_setting(group_id, 'auto_delete_count')}", callback_data=f"setting_autocount_{group_id}")],
+            [InlineKeyboardButton("🔙 Back", callback_data=f"setting_menu_{group_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"🗑️ *Auto Delete Messages*\n\n"
+            f"Status: {'✅ ENABLED' if not current else '❌ DISABLED'}\n\n"
+            f"Messages will be {'deleted' if not current else 'kept'} after {get_group_setting(group_id, 'auto_delete_count')} messages.",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
+        )
+        
+    elif action == "spam":
+        current = get_group_setting(group_id, "spam_protection")
+        update_group_setting(group_id, "spam_protection", not current)
+        
+        keyboard = [
+            [InlineKeyboardButton(f"Threshold: {get_group_setting(group_id, 'spam_threshold')} msgs", callback_data=f"setting_spamcount_{group_id}")],
+            [InlineKeyboardButton(f"Delete Admin Spam: {'✅' if get_group_setting(group_id, 'delete_admin_spam') else '❌'}", callback_data=f"setting_adminspam_{group_id}")],
+            [InlineKeyboardButton("🔙 Back", callback_data=f"setting_menu_{group_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"🛡️ *Spam Protection*\n\n"
+            f"Status: {'✅ ENABLED' if not current else '❌ DISABLED'}\n\n"
+            f"Threshold: {get_group_setting(group_id, 'spam_threshold')} messages in 10 seconds",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
+        )
+        
+    elif action == "adminspam":
+        current = get_group_setting(group_id, "delete_admin_spam")
+        update_group_setting(group_id, "delete_admin_spam", not current)
+        await query.answer(f"Admin spam deletion {'enabled' if not current else 'disabled'}!")
+        
+        keyboard = [
+            [InlineKeyboardButton(f"Threshold: {get_group_setting(group_id, 'spam_threshold')} msgs", callback_data=f"setting_spamcount_{group_id}")],
+            [InlineKeyboardButton(f"Delete Admin Spam: {'✅' if not current else '❌'}", callback_data=f"setting_adminspam_{group_id}")],
+            [InlineKeyboardButton("🔙 Back", callback_data=f"setting_menu_{group_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_reply_markup(reply_markup=reply_markup)
+        
+    elif action in ["stickers", "gifs", "links", "forwards", "welcome", "antiflood"]:
+        setting_map = {
+            "stickers": "allow_stickers",
+            "gifs": "allow_gifs",
+            "links": "allow_links",
+            "forwards": "allow_forwards",
+            "welcome": "welcome_message",
+            "antiflood": "antiflood_enabled"
+        }
+        
+        emoji_map = {
+            "stickers": "🎭",
+            "gifs": "🎬",
+            "links": "🔗",
+            "forwards": "↪️",
+            "welcome": "👋",
+            "antiflood": "🚫"
+        }
+        
+        name_map = {
+            "stickers": "Stickers",
+            "gifs": "GIFs",
+            "links": "Links",
+            "forwards": "Forwards",
+            "welcome": "Welcome Message",
+            "antiflood": "Anti-Flood"
+        }
+        
+        setting_key = setting_map[action]
+        current = get_group_setting(group_id, setting_key)
+        update_group_setting(group_id, setting_key, not current)
+        
+        await query.answer(f"{name_map[action]} {'disabled' if current else 'enabled'}!")
+        
+        # Refresh main menu
+        keyboard = [
+            [InlineKeyboardButton("🗑️ Auto Delete Messages", callback_data=f"setting_autodel_{group_id}")],
+            [InlineKeyboardButton("🛡️ Spam Protection", callback_data=f"setting_spam_{group_id}")],
+            [InlineKeyboardButton("🎭 Stickers", callback_data=f"setting_stickers_{group_id}")],
+            [InlineKeyboardButton("🎬 GIFs", callback_data=f"setting_gifs_{group_id}")],
+            [InlineKeyboardButton("🔗 Links", callback_data=f"setting_links_{group_id}")],
+            [InlineKeyboardButton("↪️ Forwards", callback_data=f"setting_forwards_{group_id}")],
+            [InlineKeyboardButton("👋 Welcome Message", callback_data=f"setting_welcome_{group_id}")],
+            [InlineKeyboardButton("🚫 Anti-Flood", callback_data=f"setting_antiflood_{group_id}")],
+            [InlineKeyboardButton("📊 View All Settings", callback_data=f"setting_view_{group_id}")],
+            [InlineKeyboardButton("❌ Close", callback_data="setting_close")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_reply_markup(reply_markup=reply_markup)
+
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle inline button callbacks"""
     query = update.callback_query
     await query.answer()
+    
+    # Handle settings callbacks
+    if query.data.startswith("setting_"):
+        await handle_setting_callback(update, context)
+        return
     
     if query.data == "chat":
         await query.edit_message_text(
@@ -3461,6 +3781,7 @@ def main() -> None:
     application.add_handler(CommandHandler("admin", admin_command))
     application.add_handler(CommandHandler("adminhelp", admin_command))
     application.add_handler(CommandHandler("stop", stop_command))
+    application.add_handler(CommandHandler("settings", settings_command))
     
     # Admin analytics commands
     application.add_handler(CommandHandler("stats", stats_command))
