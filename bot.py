@@ -37,14 +37,18 @@ except ImportError:
 
 # Get credentials from environment
 BOT_TOKEN: Final[str] = os.getenv("BOT_TOKEN", "")
-GEMINI_API_KEY: Final[str] = os.getenv("GEMINI_API_KEY", "AIzaSyCOa0Yf2QBH3Eb45-A5n-PFbdTHtRSeONM")
-OPENROUTER_API_KEY: Final[str] = os.getenv("OPENROUTER_API_KEY", "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")
+GEMINI_API_KEY: Final[str] = os.getenv("GEMINI_API_KEY", "")
+OPENROUTER_API_KEY: Final[str] = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL: Final[str] = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
+OPENAI_API_KEY: Final[str] = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL: Final[str] = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable not set!")
-if not GEMINI_API_KEY and not OPENROUTER_API_KEY:
-    raise ValueError("No AI API key set! Provide GEMINI_API_KEY or OPENROUTER_API_KEY.")
+if not GEMINI_API_KEY and not OPENROUTER_API_KEY and not OPENAI_API_KEY:
+    raise ValueError(
+        "No AI API key set! Provide GEMINI_API_KEY, OPENROUTER_API_KEY, or OPENAI_API_KEY."
+    )
 
 # Configure Gemini AI client (only if key is provided)
 GEMINI_CLIENT: Optional[genai.Client] = None
@@ -791,7 +795,6 @@ def get_openrouter_response(
         return None
 
     sys_prompt = system_prompt or SYSTEM_PROMPT
-    prompt = f"User ({user_name}): {user_message}"
 
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -804,7 +807,7 @@ def get_openrouter_response(
         "model": OPENROUTER_MODEL,
         "messages": [
             {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": prompt},
+            {"role": "user", "content": user_message},
         ],
         "temperature": 0.9,
         "top_p": 0.95,
@@ -839,15 +842,73 @@ def get_openrouter_response(
         return None
 
 
+def get_openai_response(
+    user_message: str,
+    user_name: str = "User",
+    system_prompt: Optional[str] = None,
+) -> Optional[str]:
+    """Get AI response from OpenAI (if configured)."""
+    if not OPENAI_API_KEY:
+        return None
+
+    sys_prompt = system_prompt or SYSTEM_PROMPT
+    prompt = f"User ({user_name}): {user_message}"
+
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "model": OPENAI_MODEL,
+        "messages": [
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.9,
+        "top_p": 0.95,
+        "max_tokens": 500,
+    }
+
+    try:
+        with httpx.Client(timeout=30) as client:
+            response = client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers=headers,
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+            content = (
+                data.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+            )
+            if content:
+                logger.info(f"✅ OpenAI success: {len(content)} chars")
+                return content.strip()
+            logger.warning("⚠️ OpenAI returned empty content")
+            return None
+    except httpx.HTTPStatusError as exc:
+        logger.error(f"❌ OpenAI HTTP error {exc.response.status_code}: {exc.response.text[:200]}")
+        return None
+    except Exception as exc:
+        logger.error(f"❌ OpenAI error: {type(exc).__name__}: {exc}")
+        return None
+
+
 def get_ai_response(
     user_message: str,
     user_name: str = "User",
     system_prompt: Optional[str] = None,
 ) -> str:
-    """Prefer OpenRouter if configured, otherwise fall back to Gemini."""
+    """Prefer OpenRouter, then OpenAI, then fall back to Gemini."""
     openrouter_text = get_openrouter_response(user_message, user_name, system_prompt)
     if openrouter_text:
         return openrouter_text
+    openai_text = get_openai_response(user_message, user_name, system_prompt)
+    if openai_text:
+        return openai_text
     return get_gemini_response(user_message, user_name, system_prompt)
 
 def get_gemini_response(user_message: str, user_name: str = "User", system_prompt: Optional[str] = None) -> str:
@@ -3372,6 +3433,11 @@ def main() -> None:
         logger.info(f"✅ OpenRouter: Enabled (Model: {OPENROUTER_MODEL})")
     else:
         logger.info("❌ OpenRouter: Disabled")
+
+    if OPENAI_API_KEY:
+        logger.info(f"✅ OpenAI: Enabled (Model: {OPENAI_MODEL})")
+    else:
+        logger.info("❌ OpenAI: Disabled")
     
     if GEMINI_API_KEY and GEMINI_CLIENT:
         logger.info("✅ Gemini: Enabled (Fallback)")

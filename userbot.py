@@ -82,7 +82,7 @@ async def get_openrouter_response(user_message: str, user_name: str, system_prom
                     "model": OPENROUTER_MODEL,
                     "messages": [
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": f"{user_name}: {user_message}"}
+                        {"role": "user", "content": user_message}
                     ],
                     "temperature": 0.9,
                     "max_tokens": 500
