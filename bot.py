@@ -3246,7 +3246,7 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 # ========================= CALLBACK HANDLERS ========================= #
 
 async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle group settings callbacks"""
+    """Handle group settings callbacks with full functionality"""
     query = update.callback_query
     data = query.data
     
@@ -3254,15 +3254,380 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.message.delete()
         return
     
-    # Extract setting type and group_id
+    # Extract parts from callback_data
     parts = data.split("_")
     if len(parts) < 3:
+        await query.answer("Invalid callback!", show_alert=True)
         return
     
     action = parts[1]
-    group_id = int(parts[2]) if parts[2].lstrip('-').isdigit() else 0
+    try:
+        group_id = int(parts[2]) if parts[2].lstrip('-').isdigit() else 0
+    except (ValueError, IndexError):
+        await query.answer("Invalid group ID!", show_alert=True)
+        return
     
     if not group_id:
+        await query.answer("Invalid group!", show_alert=True)
+        return
+    
+    # Initialize settings if not exists
+    if group_id not in GROUP_SETTINGS:
+        GROUP_SETTINGS[group_id] = DEFAULT_GROUP_SETTINGS.copy()
+        _save_group_settings(GROUP_SETTINGS)
+    
+    settings = GROUP_SETTINGS[group_id]
+    
+    # ============ VIEW ALL SETTINGS ============
+    if action == "view":
+        settings_text = (
+            "📋 *Current Group Settings*\n\n"
+            "*🗑️ Message Management:*\n"
+            f"├─ Auto Delete: {'✅ ON' if settings['auto_delete_enabled'] else '❌ OFF'} ({settings['auto_delete_count']} msgs)\n"
+            f"├─ Max Length: {settings['max_message_length']} chars\n\n"
+            "*🛡️ Security:*\n"
+            f"├─ Spam Protection: {'✅ ON' if settings['spam_protection'] else '❌ OFF'} ({settings['spam_threshold']} msgs)\n"
+            f"├─ Delete Admin Spam: {'✅ YES' if settings['delete_admin_spam'] else '❌ NO'}\n"
+            f"├─ Anti-Flood: {'✅ ON' if settings['antiflood_enabled'] else '❌ OFF'}\n\n"
+            "*📋 Content Control:*\n"
+            f"├─ Stickers: {'✅ Allowed' if settings['allow_stickers'] else '❌ Not Allowed'}\n"
+            f"├─ GIFs: {'✅ Allowed' if settings['allow_gifs'] else '❌ Not Allowed'}\n"
+            f"├─ Links: {'✅ Allowed' if settings['allow_links'] else '❌ Not Allowed'}\n"
+            f"├─ Forwards: {'✅ Allowed' if settings['allow_forwards'] else '❌ Not Allowed'}\n\n"
+            "*👋 Notifications:*\n"
+            f"└─ Welcome: {'✅ ON' if settings['welcome_message'] else '❌ OFF'}"
+        )
+        keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data=f"setting_menu_{group_id}")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(settings_text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+        await query.answer()
+        return
+    
+    # ============ MAIN MENU ============
+    if action == "menu":
+        keyboard = [
+            [InlineKeyboardButton("🗑️ Message Management", callback_data=f"setting_cat_messages_{group_id}"),
+             InlineKeyboardButton("🛡️ Security", callback_data=f"setting_cat_security_{group_id}")],
+            [InlineKeyboardButton("📋 Content Control", callback_data=f"setting_cat_content_{group_id}"),
+             InlineKeyboardButton("👋 Notifications", callback_data=f"setting_cat_notify_{group_id}")],
+            [InlineKeyboardButton("📊 View All", callback_data=f"setting_view_{group_id}"),
+             InlineKeyboardButton("❌ Close", callback_data="setting_close")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            "⚙️ *Group Settings - Baby Bot* ❤️\n\n"
+            "Apne group ke settings customize karo! 🎨\n\n"
+            "*Categories:*\n"
+            "🗑️ *Message Management* - Auto-delete messages\n"
+            "🛡️ *Security* - Spam & anti-flood protection\n"
+            "📋 *Content Control* - Stickers, GIFs, links, forwards\n"
+            "👋 *Notifications* - Welcome messages\n\n"
+            "Kisi bhi category pe click karo! 👇",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
+        )
+        await query.answer()
+        return
+    
+    # ============ CATEGORY: MESSAGE MANAGEMENT ============
+    if action == "cat" and len(parts) >= 4 and parts[3] == "messages":
+        keyboard = [
+            [InlineKeyboardButton(f"🗑️ Auto Delete: {'✅' if settings['auto_delete_enabled'] else '❌'}", 
+                                callback_data=f"setting_autodel_{group_id}")],
+            [InlineKeyboardButton(f"✏️ Message Count: {settings['auto_delete_count']}", 
+                                callback_data=f"setting_editautocount_{group_id}")],
+            [InlineKeyboardButton("🔙 Back to Menu", callback_data=f"setting_menu_{group_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            "🗑️ *Message Management*\n\n"
+            f"Auto Delete: {'✅ ENABLED' if settings['auto_delete_enabled'] else '❌ DISABLED'}\n"
+            f"Delete after {settings['auto_delete_count']} messages\n\n"
+            "Click buttons to customize:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
+        )
+        await query.answer()
+        return
+    
+    # ============ CATEGORY: SECURITY ============
+    if action == "cat" and len(parts) >= 4 and parts[3] == "security":
+        keyboard = [
+            [InlineKeyboardButton(f"🛡️ Spam: {'✅' if settings['spam_protection'] else '❌'}", 
+                                callback_data=f"setting_spam_{group_id}"),
+             InlineKeyboardButton(f"🚫 Flood: {'✅' if settings['antiflood_enabled'] else '❌'}", 
+                                callback_data=f"setting_antiflood_{group_id}")],
+            [InlineKeyboardButton(f"✏️ Threshold: {settings['spam_threshold']}", 
+                                callback_data=f"setting_editspamcount_{group_id}")],
+            [InlineKeyboardButton(f"Admin Spam: {'✅' if settings['delete_admin_spam'] else '❌'}", 
+                                callback_data=f"setting_adminspam_{group_id}")],
+            [InlineKeyboardButton("🔙 Back to Menu", callback_data=f"setting_menu_{group_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            "🛡️ *Security Settings*\n\n"
+            f"Spam Protection: {'✅ ON' if settings['spam_protection'] else '❌ OFF'}\n"
+            f"Anti-Flood: {'✅ ON' if settings['antiflood_enabled'] else '❌ OFF'}\n"
+            f"Threshold: {settings['spam_threshold']} msgs/10s\n"
+            f"Delete Admin Spam: {'✅ YES' if settings['delete_admin_spam'] else '❌ NO'}\n\n"
+            "Click to toggle:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
+        )
+        await query.answer()
+        return
+    
+    # ============ CATEGORY: CONTENT CONTROL ============
+    if action == "cat" and len(parts) >= 4 and parts[3] == "content":
+        keyboard = [
+            [InlineKeyboardButton(f"🎭 Stickers: {'✅' if settings['allow_stickers'] else '❌'}", 
+                                callback_data=f"setting_stickers_{group_id}"),
+             InlineKeyboardButton(f"🎬 GIFs: {'✅' if settings['allow_gifs'] else '❌'}", 
+                                callback_data=f"setting_gifs_{group_id}")],
+            [InlineKeyboardButton(f"🔗 Links: {'✅' if settings['allow_links'] else '❌'}", 
+                                callback_data=f"setting_links_{group_id}"),
+             InlineKeyboardButton(f"↪️ Forwards: {'✅' if settings['allow_forwards'] else '❌'}", 
+                                callback_data=f"setting_forwards_{group_id}")],
+            [InlineKeyboardButton("🔙 Back to Menu", callback_data=f"setting_menu_{group_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            "📋 *Content Control Settings*\n\n"
+            f"Stickers: {'✅ Allowed' if settings['allow_stickers'] else '❌ Not Allowed'}\n"
+            f"GIFs: {'✅ Allowed' if settings['allow_gifs'] else '❌ Not Allowed'}\n"
+            f"Links: {'✅ Allowed' if settings['allow_links'] else '❌ Not Allowed'}\n"
+            f"Forwards: {'✅ Allowed' if settings['allow_forwards'] else '❌ Not Allowed'}\n\n"
+            "Click to toggle:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
+        )
+        await query.answer()
+        return
+    
+    # ============ CATEGORY: NOTIFICATIONS ============
+    if action == "cat" and len(parts) >= 4 and parts[3] == "notify":
+        keyboard = [
+            [InlineKeyboardButton(f"👋 Welcome: {'✅' if settings['welcome_message'] else '❌'}", 
+                                callback_data=f"setting_welcome_{group_id}")],
+            [InlineKeyboardButton("🔙 Back to Menu", callback_data=f"setting_menu_{group_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            "👋 *Notification Settings*\n\n"
+            f"Welcome Message: {'✅ ON' if settings['welcome_message'] else '❌ OFF'}\n\n"
+            "Click to toggle:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
+        )
+        await query.answer()
+        return
+    
+    # ============ TOGGLE SETTINGS ============
+    if action == "autodel":
+        settings['auto_delete_enabled'] = not settings['auto_delete_enabled']
+        update_group_setting(group_id, 'auto_delete_enabled', settings['auto_delete_enabled'])
+        await query.answer(f"✅ Auto-delete {'enabled' if settings['auto_delete_enabled'] else 'disabled'}!")
+        
+        # Refresh category view
+        keyboard = [
+            [InlineKeyboardButton(f"🗑️ Auto Delete: {'✅' if settings['auto_delete_enabled'] else '❌'}", 
+                                callback_data=f"setting_autodel_{group_id}")],
+            [InlineKeyboardButton(f"✏️ Message Count: {settings['auto_delete_count']}", 
+                                callback_data=f"setting_editautocount_{group_id}")],
+            [InlineKeyboardButton("🔙 Back to Menu", callback_data=f"setting_menu_{group_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_reply_markup(reply_markup=reply_markup)
+        return
+    
+    if action == "spam":
+        settings['spam_protection'] = not settings['spam_protection']
+        update_group_setting(group_id, 'spam_protection', settings['spam_protection'])
+        await query.answer(f"✅ Spam protection {'enabled' if settings['spam_protection'] else 'disabled'}!")
+        
+        keyboard = [
+            [InlineKeyboardButton(f"🛡️ Spam: {'✅' if settings['spam_protection'] else '❌'}", 
+                                callback_data=f"setting_spam_{group_id}"),
+             InlineKeyboardButton(f"🚫 Flood: {'✅' if settings['antiflood_enabled'] else '❌'}", 
+                                callback_data=f"setting_antiflood_{group_id}")],
+            [InlineKeyboardButton(f"✏️ Threshold: {settings['spam_threshold']}", 
+                                callback_data=f"setting_editspamcount_{group_id}")],
+            [InlineKeyboardButton(f"Admin Spam: {'✅' if settings['delete_admin_spam'] else '❌'}", 
+                                callback_data=f"setting_adminspam_{group_id}")],
+            [InlineKeyboardButton("🔙 Back to Menu", callback_data=f"setting_menu_{group_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_reply_markup(reply_markup=reply_markup)
+        return
+    
+    if action == "antiflood":
+        settings['antiflood_enabled'] = not settings['antiflood_enabled']
+        update_group_setting(group_id, 'antiflood_enabled', settings['antiflood_enabled'])
+        await query.answer(f"✅ Anti-flood {'enabled' if settings['antiflood_enabled'] else 'disabled'}!")
+        
+        keyboard = [
+            [InlineKeyboardButton(f"🛡️ Spam: {'✅' if settings['spam_protection'] else '❌'}", 
+                                callback_data=f"setting_spam_{group_id}"),
+             InlineKeyboardButton(f"🚫 Flood: {'✅' if settings['antiflood_enabled'] else '❌'}", 
+                                callback_data=f"setting_antiflood_{group_id}")],
+            [InlineKeyboardButton(f"✏️ Threshold: {settings['spam_threshold']}", 
+                                callback_data=f"setting_editspamcount_{group_id}")],
+            [InlineKeyboardButton(f"Admin Spam: {'✅' if settings['delete_admin_spam'] else '❌'}", 
+                                callback_data=f"setting_adminspam_{group_id}")],
+            [InlineKeyboardButton("🔙 Back to Menu", callback_data=f"setting_menu_{group_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_reply_markup(reply_markup=reply_markup)
+        return
+    
+    if action == "adminspam":
+        settings['delete_admin_spam'] = not settings['delete_admin_spam']
+        update_group_setting(group_id, 'delete_admin_spam', settings['delete_admin_spam'])
+        await query.answer(f"✅ Admin spam deletion {'enabled' if settings['delete_admin_spam'] else 'disabled'}!")
+        
+        keyboard = [
+            [InlineKeyboardButton(f"🛡️ Spam: {'✅' if settings['spam_protection'] else '❌'}", 
+                                callback_data=f"setting_spam_{group_id}"),
+             InlineKeyboardButton(f"🚫 Flood: {'✅' if settings['antiflood_enabled'] else '❌'}", 
+                                callback_data=f"setting_antiflood_{group_id}")],
+            [InlineKeyboardButton(f"✏️ Threshold: {settings['spam_threshold']}", 
+                                callback_data=f"setting_editspamcount_{group_id}")],
+            [InlineKeyboardButton(f"Admin Spam: {'✅' if settings['delete_admin_spam'] else '❌'}", 
+                                callback_data=f"setting_adminspam_{group_id}")],
+            [InlineKeyboardButton("🔙 Back to Menu", callback_data=f"setting_menu_{group_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_reply_markup(reply_markup=reply_markup)
+        return
+    
+    # ============ CONTENT CONTROL TOGGLES ============
+    if action in ["stickers", "gifs", "links", "forwards", "welcome"]:
+        setting_map = {
+            "stickers": "allow_stickers",
+            "gifs": "allow_gifs",
+            "links": "allow_links",
+            "forwards": "allow_forwards",
+            "welcome": "welcome_message"
+        }
+        
+        name_map = {
+            "stickers": "Stickers",
+            "gifs": "GIFs",
+            "links": "Links",
+            "forwards": "Forwards",
+            "welcome": "Welcome Message"
+        }
+        
+        setting_key = setting_map[action]
+        settings[setting_key] = not settings[setting_key]
+        update_group_setting(group_id, setting_key, settings[setting_key])
+        
+        status = "enabled" if settings[setting_key] else "disabled"
+        await query.answer(f"✅ {name_map[action]} {status}!")
+        
+        # Determine which category to refresh
+        if action in ["stickers", "gifs", "links", "forwards"]:
+            keyboard = [
+                [InlineKeyboardButton(f"🎭 Stickers: {'✅' if settings['allow_stickers'] else '❌'}", 
+                                    callback_data=f"setting_stickers_{group_id}"),
+                 InlineKeyboardButton(f"🎬 GIFs: {'✅' if settings['allow_gifs'] else '❌'}", 
+                                    callback_data=f"setting_gifs_{group_id}")],
+                [InlineKeyboardButton(f"🔗 Links: {'✅' if settings['allow_links'] else '❌'}", 
+                                    callback_data=f"setting_links_{group_id}"),
+                 InlineKeyboardButton(f"↪️ Forwards: {'✅' if settings['allow_forwards'] else '❌'}", 
+                                    callback_data=f"setting_forwards_{group_id}")],
+                [InlineKeyboardButton("🔙 Back to Menu", callback_data=f"setting_menu_{group_id}")]
+            ]
+        else:
+            keyboard = [
+                [InlineKeyboardButton(f"👋 Welcome: {'✅' if settings['welcome_message'] else '❌'}", 
+                                    callback_data=f"setting_welcome_{group_id}")],
+                [InlineKeyboardButton("🔙 Back to Menu", callback_data=f"setting_menu_{group_id}")]
+            ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_reply_markup(reply_markup=reply_markup)
+        return
+    
+    # ============ EDIT NUMERIC VALUES ============
+    if action == "editautocount":
+        keyboard = [
+            [InlineKeyboardButton("50", callback_data=f"setting_setautocount_{group_id}_50"),
+             InlineKeyboardButton("100", callback_data=f"setting_setautocount_{group_id}_100")],
+            [InlineKeyboardButton("200", callback_data=f"setting_setautocount_{group_id}_200"),
+             InlineKeyboardButton("500", callback_data=f"setting_setautocount_{group_id}_500")],
+            [InlineKeyboardButton("1000", callback_data=f"setting_setautocount_{group_id}_1000"),
+             InlineKeyboardButton("2000", callback_data=f"setting_setautocount_{group_id}_2000")],
+            [InlineKeyboardButton("🔙 Back", callback_data=f"setting_cat_messages_{group_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            f"✏️ *Select Message Count*\n\n"
+            f"Current: {settings['auto_delete_count']} messages\n\n"
+            f"Messages will be deleted after this count:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
+        )
+        await query.answer()
+        return
+    
+    if action == "setautocount" and len(parts) >= 4:
+        new_count = int(parts[3])
+        settings['auto_delete_count'] = new_count
+        update_group_setting(group_id, 'auto_delete_count', new_count)
+        await query.answer(f"✅ Message count set to {new_count}!")
+        
+        keyboard = [
+            [InlineKeyboardButton(f"🗑️ Auto Delete: {'✅' if settings['auto_delete_enabled'] else '❌'}", 
+                                callback_data=f"setting_autodel_{group_id}")],
+            [InlineKeyboardButton(f"✏️ Message Count: {new_count}", 
+                                callback_data=f"setting_editautocount_{group_id}")],
+            [InlineKeyboardButton("🔙 Back to Menu", callback_data=f"setting_menu_{group_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_reply_markup(reply_markup=reply_markup)
+        return
+    
+    if action == "editspamcount":
+        keyboard = [
+            [InlineKeyboardButton("3", callback_data=f"setting_setspamcount_{group_id}_3"),
+             InlineKeyboardButton("5", callback_data=f"setting_setspamcount_{group_id}_5")],
+            [InlineKeyboardButton("7", callback_data=f"setting_setspamcount_{group_id}_7"),
+             InlineKeyboardButton("10", callback_data=f"setting_setspamcount_{group_id}_10")],
+            [InlineKeyboardButton("15", callback_data=f"setting_setspamcount_{group_id}_15"),
+             InlineKeyboardButton("20", callback_data=f"setting_setspamcount_{group_id}_20")],
+            [InlineKeyboardButton("🔙 Back", callback_data=f"setting_cat_security_{group_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            f"✏️ *Select Spam Threshold*\n\n"
+            f"Current: {settings['spam_threshold']} messages\n\n"
+            f"Messages in 10 seconds = spam trigger:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
+        )
+        await query.answer()
+        return
+    
+    if action == "setspamcount" and len(parts) >= 4:
+        new_threshold = int(parts[3])
+        settings['spam_threshold'] = new_threshold
+        update_group_setting(group_id, 'spam_threshold', new_threshold)
+        await query.answer(f"✅ Spam threshold set to {new_threshold}!")
+        
+        keyboard = [
+            [InlineKeyboardButton(f"🛡️ Spam: {'✅' if settings['spam_protection'] else '❌'}", 
+                                callback_data=f"setting_spam_{group_id}"),
+             InlineKeyboardButton(f"🚫 Flood: {'✅' if settings['antiflood_enabled'] else '❌'}", 
+                                callback_data=f"setting_antiflood_{group_id}")],
+            [InlineKeyboardButton(f"✏️ Threshold: {new_threshold}", 
+                                callback_data=f"setting_editspamcount_{group_id}")],
+            [InlineKeyboardButton(f"Admin Spam: {'✅' if settings['delete_admin_spam'] else '❌'}", 
+                                callback_data=f"setting_adminspam_{group_id}")],
+            [InlineKeyboardButton("🔙 Back to Menu", callback_data=f"setting_menu_{group_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_reply_markup(reply_markup=reply_markup)
         return
     
     # View all settings
@@ -4094,7 +4459,10 @@ def main() -> None:
     application.add_handler(CommandHandler("pin", pin_command))
     application.add_handler(CommandHandler("unpin", unpin_command))
     
-    # Register callback handler for inline buttons
+    # Register callback handlers for inline buttons
+    # Settings callbacks (higher priority)
+    application.add_handler(CallbackQueryHandler(handle_setting_callback, pattern=r"^setting_"))
+    # General button callbacks
     application.add_handler(CallbackQueryHandler(button_callback))
     
     # Register chat member handler for group tracking
