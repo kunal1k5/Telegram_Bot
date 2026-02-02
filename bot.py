@@ -1116,6 +1116,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             InlineKeyboardButton("📖 Help", callback_data="help"),
             InlineKeyboardButton("📢 Channel", url=f"https://t.me/{CHANNEL_USERNAME[1:]}"),
         ],
+        [
+            InlineKeyboardButton("⚙️ Group Settings", callback_data="show_settings_info"),
+        ],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -3553,8 +3556,82 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 InlineKeyboardButton("📖 Help", callback_data="help"),
                 InlineKeyboardButton("📢 Channel", url=f"https://t.me/{CHANNEL_USERNAME[1:]}"),
             ],
+            [
+                InlineKeyboardButton("⚙️ Group Settings", callback_data="show_settings_info"),
+            ],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            START_TEXT,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup,
+        )
+    
+    elif query.data == "show_settings_info":
+        # Load user's groups from database
+        user_groups = []
+        for group_id, group_data in GROUPS_DATABASE.items():
+            if group_id < 0:  # Negative IDs are groups
+                user_groups.append((group_id, group_data.get('title', 'Unknown Group')))
+        
+        if not user_groups:
+            keyboard = [[InlineKeyboardButton("🏠 Back to Start", callback_data="start")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                "⚙️ *Group Settings*\n\n"
+                "Abhi tak kisi group mein nahi ho! 😊\n\n"
+                "Mujhe apne group mein add karo:\n"
+                "1. Group mein jao\n"
+                "2. ➕ Add Members pe click karo\n"
+                "3. @AnimxClanBot search karo aur add karo\n"
+                "4. Mujhe admin banao\n"
+                "5. Group mein /settings use karo!\n\n"
+                "💡 *Note:* Settings sirf group admins access kar sakte hain.",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=reply_markup,
+            )
+        else:
+            # Show list of groups
+            keyboard = []
+            for group_id, group_title in user_groups[:10]:  # Show max 10 groups
+                keyboard.append([InlineKeyboardButton(
+                    f"⚙️ {group_title}", 
+                    callback_data=f"groupsetting_{group_id}"
+                )])
+            keyboard.append([InlineKeyboardButton("🏠 Back to Start", callback_data="start")])
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                "⚙️ *Group Settings*\n\n"
+                "Apne group ko select karo settings change karne ke liye:\n\n"
+                "💡 *Note:* Settings change karne ke liye:\n"
+                "• Group mein jao\n"
+                "• /settings command use karo\n"
+                "• Sirf admins access kar sakte hain!",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=reply_markup,
+            )
+    
+    elif query.data.startswith("groupsetting_"):
+        group_id = int(query.data.split("_")[1])
+        group_name = GROUPS_DATABASE.get(group_id, {}).get('title', 'Group')
+        
+        keyboard = [[InlineKeyboardButton("🔙 Back to Groups", callback_data="show_settings_info")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"⚙️ *Settings for {group_name}*\n\n"
+            f"Group settings sirf group chat mein access kar sakte ho! 😊\n\n"
+            f"Kaise use karein:\n"
+            f"1. `{group_name}` group mein jao\n"
+            f"2. /settings command type karo\n"
+            f"3. Settings customize karo\n\n"
+            f"💡 Tumhe us group ka admin hona chahiye!",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup,
+        )
         
         await query.edit_message_text(
             START_TEXT,
