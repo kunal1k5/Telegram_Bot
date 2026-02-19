@@ -71,7 +71,17 @@ class VCManager:
                 session_string=self.assistant_session,
                 no_updates=True,
             )
-            await self._assistant.start()
+            try:
+                await self._assistant.start()
+            except Exception as e:
+                err = str(e).lower()
+                if "base64" in err or "session" in err:
+                    raise RuntimeError(
+                        "Invalid ASSISTANT_SESSION. Use a Pyrogram session string "
+                        "(from Client.export_session_string), not Telethon StringSession. "
+                        "Also ensure no quotes/spaces/newlines were added in env value."
+                    ) from e
+                raise RuntimeError(f"Assistant login failed: {e}") from e
 
             self._calls = PyTgCalls(self._assistant)
             await self._calls.start()
