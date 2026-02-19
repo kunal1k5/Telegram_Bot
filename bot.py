@@ -4763,6 +4763,33 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 f"Error: {err}"
             ),
         )
+        fallback_markers = [
+            "Could not resolve track",
+            "Could not resolve stream",
+            "Could not resolve audio stream url",
+            "Requested format is not available",
+            "YouTube blocked anonymous extraction",
+            "Sign in to confirm you're not a bot",
+            "Sign in to confirm you’re not a bot",
+        ]
+        if any(marker.lower() in err.lower() for marker in fallback_markers):
+            try:
+                await status_msg.edit_text(
+                    "VC source blocked. Trying fallback: sending audio file in chat..."
+                )
+                await song_command(update, context)
+                return
+            except Exception as fallback_error:
+                await _send_log_to_channel(
+                    context,
+                    (
+                        "VC_FALLBACK_ERROR\n"
+                        f"Chat ID: {update.effective_chat.id if update.effective_chat else 'None'}\n"
+                        f"By: {update.effective_user.id if update.effective_user else 'None'}\n"
+                        f"Query: {query}\n"
+                        f"Error: {fallback_error}"
+                    ),
+                )
         troubleshooting = (
             "\n\nQuick checks:\n"
             "1. Assistant account is in this group.\n"
