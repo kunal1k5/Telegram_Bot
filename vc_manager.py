@@ -157,6 +157,45 @@ class VCManager:
     def _is_url(self, text: str) -> bool:
         return bool(re.match(r"^https?://", text.strip(), re.IGNORECASE))
 
+    def _pick_stream_url(self, info: dict[str, Any]) -> Optional[str]:
+        """Pick a playable stream URL from yt-dlp info with fallbacks."""
+        direct = info.get("url")
+        if isinstance(direct, str) and direct.startswith(("http://", "https://")):
+            return direct
+
+        requested_formats = info.get("requested_formats") or []
+        for fmt in requested_formats:
+            url = (fmt or {}).get("url")
+            if isinstance(url, str) and url.startswith(("http://", "https://")):
+                return url
+
+        formats = info.get("formats") or []
+        audio_candidates = []
+        other_candidates = []
+        for fmt in formats:
+            if not isinstance(fmt, dict):
+                continue
+            url = fmt.get("url")
+            if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+                continue
+            vcodec = (fmt.get("vcodec") or "").lower()
+            acodec = (fmt.get("acodec") or "").lower()
+            abr = fmt.get("abr") or 0
+            tbr = fmt.get("tbr") or 0
+            score = (abr or tbr or 0)
+            if vcodec == "none" and acodec not in ("none", ""):
+                audio_candidates.append((score, url))
+            else:
+                other_candidates.append((score, url))
+
+        if audio_candidates:
+            audio_candidates.sort(key=lambda x: x[0], reverse=True)
+            return audio_candidates[0][1]
+        if other_candidates:
+            other_candidates.sort(key=lambda x: x[0], reverse=True)
+            return other_candidates[0][1]
+        return None
+
     def _resolve_track_sync(self, query: str, requested_by: str) -> VCTrack:
         ydl_opts = {
             "quiet": True,
@@ -165,6 +204,12 @@ class VCManager:
             "default_search": "ytsearch1",
             "extract_flat": False,
             "skip_download": True,
+            "format": "bestaudio/best",
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["android", "web"],
+                }
+            },
         }
 
         search_target = query if self._is_url(query) else f"ytsearch1:{query}"
@@ -186,9 +231,9 @@ class VCManager:
             detailed = ydl.extract_info(webpage_url, download=False)
             if not detailed:
                 raise RuntimeError("Could not resolve stream info")
-            stream_url = detailed.get("url")
+            stream_url = self._pick_stream_url(detailed)
             if not stream_url:
-                raise RuntimeError("Could not resolve audio stream url")
+                raise RuntimeError("Could not resolve audio stream url (no playable format)")
 
             return VCTrack(
                 title=title[:120],
