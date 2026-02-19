@@ -53,6 +53,7 @@ API_HASH: Final[str] = os.getenv("API_HASH", "")
 VC_API_ID: Final[int] = int(os.getenv("VC_API_ID", str(API_ID)))
 VC_API_HASH: Final[str] = os.getenv("VC_API_HASH", API_HASH)
 ASSISTANT_SESSION: Final[str] = os.getenv("ASSISTANT_SESSION", "")
+START_STICKER_FILE_ID: Final[str] = os.getenv("START_STICKER_FILE_ID", "")
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable not set!")
@@ -1207,13 +1208,14 @@ Make them smile. Make them feel heard. Have fun with them. â¤ï¸
 # Start message
 START_TEXT: Final[str] = (
     "\U0001F496 *Hey! I'm Baby*\n\n"
-    "Your friendly music + chat companion, always ready to help \U0001F3A7\u2728\n\n"
+    "Your premium music + chat companion, always ready to help \U0001F3A7\u2728\n\n"
     "*What I can do:*\n"
     "- \U0001F4AC Chat naturally like a friend\n"
     "- \U0001F3B5 Find and send songs\n"
     "- \U0001F399\uFE0F Play songs in group voice chat\n"
     "- \U0001F6E0\uFE0F Help with admin and utility commands\n\n"
-    "Send me a message and let's vibe! \U0001F680"
+    "Send me a message and let's vibe! \U0001F680\n"
+    "_Fast. Smart. Always active._ \U0001F31F"
 )
 
 HELP_TEXT: Final[str] = (
@@ -1723,6 +1725,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=_build_start_keyboard(),
     )
+    if START_STICKER_FILE_ID:
+        try:
+            await update.effective_message.reply_sticker(START_STICKER_FILE_ID)
+        except Exception as e:
+            logger.warning(f"Could not send start sticker: {e}")
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -4405,8 +4412,9 @@ async def vcguide_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "Setup (one time):\n"
         "1. Add bot and assistant account to group.\n"
         "2. Make both admin.\n"
-        "3. Start group voice chat.\n"
-        "4. Give assistant permission to manage voice chats.\n\n"
+        "3. Enable Invite Users via Link for bot admin role.\n"
+        "4. If assistant is banned, unban it.\n"
+        "5. Start group voice chat.\n\n"
         "Use commands in group:\n"
         "- /vplay <song name or url>\n"
         "- /vqueue\n"
@@ -4440,6 +4448,14 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         # Auto-join assistant if missing in group (best effort).
         if not await vc.is_assistant_in_chat(chat_id):
+            assistant_id, assistant_username = await vc.get_assistant_identity()
+            if assistant_id:
+                # If assistant was banned in group, try to unban automatically.
+                try:
+                    await context.bot.unban_chat_member(chat_id=chat_id, user_id=assistant_id)
+                except Exception:
+                    pass
+
             try:
                 invite = await context.bot.create_chat_invite_link(
                     chat_id=chat_id,
@@ -4450,20 +4466,35 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 await vc.join_chat_via_invite(invite.invite_link)
                 await asyncio.sleep(1.5)
             except Exception as auto_join_error:
+                err_txt = str(auto_join_error).lower()
+                if "not enough rights" in err_txt or "administrator" in err_txt or "invite" in err_txt:
+                    await status_msg.edit_text(
+                        "\U0001F6A7 VC setup needs one admin permission.\n\n"
+                        "Please enable Invite Users via Link for the bot admin role, then run /vplay again.\n\n"
+                        "Also ensure assistant is not banned in this group."
+                    )
+                    return
                 await status_msg.edit_text(
-                    "VC setup incomplete: I could not auto-add the assistant account.\n\n"
+                    "\U0001F6A7 VC setup incomplete: I could not auto-add the assistant account.\n\n"
                     "Required:\n"
                     "1. Bot must be admin with invite permission.\n"
                     "2. Assistant account must be allowed in the group.\n"
-                    "3. Then run /vplay again.\n\n"
+                    "3. If assistant is banned, unban and try again.\n"
+                    "4. Then run /vplay again.\n\n"
                     f"Details: {auto_join_error}"
                 )
                 return
 
             if not await vc.is_assistant_in_chat(chat_id):
+                assistant_line = (
+                    f"Assistant: @{assistant_username}"
+                    if assistant_username
+                    else "Assistant account is available in configured session."
+                )
                 await status_msg.edit_text(
-                    "Assistant is still not in this group.\n"
-                    "Please add assistant manually once, then use /vplay again."
+                    "\U0001F6A7 Assistant is still not in this group.\n"
+                    "Please add assistant manually once, then use /vplay again.\n"
+                    f"{assistant_line}"
                 )
                 return
 
@@ -4472,12 +4503,17 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         if mode == "playing":
             await status_msg.edit_text(
-                f"VC Now Playing\nTitle: {track.title}\nRequested by: {requested_by}\nSource: {track.webpage_url}"
+                f"\U0001F3B6 Started Streaming\n\n"
+                f"\U0001F3B5 Title: {track.title}\n"
+                f"\U0001F464 Requested by: {requested_by}\n"
+                f"\U0001F517 Source: {track.webpage_url}"
             )
         else:
             queue_len = len(vc.get_queue(chat_id))
             await status_msg.edit_text(
-                f"Added to VC queue\nTitle: {track.title}\nPosition: {queue_len}"
+                f"\U0001F4DC Added to Queue\n\n"
+                f"\U0001F3B5 Title: {track.title}\n"
+                f"\U0001F522 Position: {queue_len}"
             )
 
         await _send_log_to_channel(
@@ -5069,8 +5105,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "\U0001F399\uFE0F Voice Chat Play Guide\n\n"
             "1. Add bot + assistant account in group.\n"
             "2. Give both admin rights (voice chat permissions).\n"
-            "3. Start group voice chat.\n"
-            "4. Use /vplay <song name>.\n\n"
+            "3. Enable Invite Users via Link for bot admin role.\n"
+            "4. If assistant is banned, unban it.\n"
+            "5. Start group voice chat and use /vplay <song name>.\n\n"
             "Controls: /vqueue, /vskip, /vstop\n"
             "Tip: /play <song> in group also starts VC play \u2705",
             reply_markup=reply_markup,
