@@ -2,3 +2,6 @@ python-telegram-bot==21.4
 google-genai
 httpx
 yt-dlp
+pyrogram
+tgcrypto
+py-tgcalls

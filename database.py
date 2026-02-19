@@ -277,3 +277,31 @@ class BotDatabase:
                 (group_id, limit),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def get_usage_snapshot(self) -> dict[str, int]:
+        now = time.time()
+        one_hour_ago = now - 3600
+        day_ago = now - 86400
+        with self._lock, self._connect() as conn:
+            return {
+                "total_users_all_time": conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"],
+                "total_groups_all_time": conn.execute("SELECT COUNT(*) AS c FROM groups").fetchone()["c"],
+                "users_active_1h": conn.execute(
+                    "SELECT COUNT(*) AS c FROM users WHERE last_seen >= ?", (one_hour_ago,)
+                ).fetchone()["c"],
+                "users_active_24h": conn.execute(
+                    "SELECT COUNT(*) AS c FROM users WHERE last_seen >= ?", (day_ago,)
+                ).fetchone()["c"],
+                "groups_active_24h": conn.execute(
+                    "SELECT COUNT(*) AS c FROM groups WHERE last_active >= ?", (day_ago,)
+                ).fetchone()["c"],
+                "new_users_24h": conn.execute(
+                    "SELECT COUNT(*) AS c FROM users WHERE join_date >= ?", (day_ago,)
+                ).fetchone()["c"],
+                "new_groups_24h": conn.execute(
+                    "SELECT COUNT(*) AS c FROM groups WHERE added_date >= ?", (day_ago,)
+                ).fetchone()["c"],
+                "events_24h": conn.execute(
+                    "SELECT COUNT(*) AS c FROM activities WHERE ts >= ?", (day_ago,)
+                ).fetchone()["c"],
+            }

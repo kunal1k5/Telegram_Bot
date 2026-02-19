@@ -129,6 +129,16 @@ OPENROUTER_MODEL=openai/gpt-4o-mini
 GEMINI_API_KEY=your_gemini_api_key_here
 
 ADMIN_ID=your_telegram_user_id
+
+# Logging channel (recommended)
+LOG_CHANNEL_ID=-100xxxxxxxxxx
+LOG_CHANNEL_USERNAME=@AnimxClan_Channel
+ENABLE_USAGE_LOGS=true
+
+# Voice Chat (VC) assistant config
+API_ID=your_api_id_from_my_telegram_org
+API_HASH=your_api_hash_from_my_telegram_org
+ASSISTANT_SESSION=your_pyrogram_string_session
 ```
 
 **Note:** Bot will use OpenRouter first, then fallback to Gemini if OpenRouter is unavailable.
@@ -246,6 +256,10 @@ ANIMX_MUSIC_BOT/
 - `/song <name>` - Download song
 - `/yt <url>` - Download from YouTube
 - `play <name>` - Quick play
+- `/vplay <name/url>` - Play in voice chat
+- `/vqueue` - Show VC queue
+- `/vskip` - Skip VC track
+- `/vstop` - Stop VC playback
 
 ### Chat & Info
 - `/chat <message>` - AI chat

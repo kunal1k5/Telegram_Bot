@@ -35,6 +35,7 @@ except ImportError:
     yt_dlp = None
 
 from database import BotDatabase
+from vc_manager import VCManager
 
 # ========================= CONFIGURATION ========================= #
 
@@ -45,6 +46,9 @@ OPENROUTER_API_KEY: Final[str] = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL: Final[str] = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
 OPENAI_API_KEY: Final[str] = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL: Final[str] = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+API_ID: Final[int] = int(os.getenv("API_ID", "0"))
+API_HASH: Final[str] = os.getenv("API_HASH", "")
+ASSISTANT_SESSION: Final[str] = os.getenv("ASSISTANT_SESSION", "")
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable not set!")
@@ -392,7 +396,7 @@ async def _register_user_from_update(update: Update) -> None:
 
 async def _register_group_from_update(update: Update) -> None:
     """Helper to register group from Update object"""
-    if update.effective_chat and update.effective_chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
+    if update.effective_chat and update.effective_chat.type in [ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL]:
         await _register_group(update.effective_chat.id, update.effective_chat)
 
 async def _check_admin_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -1238,9 +1242,16 @@ HELP_TEXT: Final[str] = """
 /broadcast_now - Broadcast replied content
 /broadcastsong <name> - Broadcast a song
 /dashboard - Live analytics
+/channelstats - Send past/present usage report
 /chatid - Show chat/user IDs
 /users - List users
 /groups - List groups
+
+*Voice Chat (VC) Commands:*
+/vplay <name/url> - Play in group voice chat
+/vqueue - Show VC queue
+/vskip - Skip current VC song
+/vstop - Stop VC and clear queue
 
 *Notes:*
 - You can chat in any language.
@@ -1261,6 +1272,8 @@ logger = logging.getLogger("ANIMX_CLAN_BOT")
 
 # Persistent SQLite tracker (users, groups, activity)
 BOT_DB = BotDatabase(Path("bot_data.db"))
+VC_MANAGER: Optional[VCManager] = None
+VC_LOCK = asyncio.Lock()
 
 # ========================= GEMINI AI HELPER ========================= #
 
@@ -1464,6 +1477,39 @@ def get_gemini_response(user_message: str, user_name: str = "User", system_promp
         return "thoda network issue lag raha hai 😅 phir se try karna"
 
 
+
+def _build_channel_stats_report() -> str:
+    snap = BOT_DB.get_usage_snapshot()
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    return (
+        "BOT USAGE STATS REPORT\n\n"
+        f"Time: {now}\n\n"
+        "ALL-TIME (PAST + PRESENT)\n"
+        f"- Total Users Ever: {snap['total_users_all_time']}\n"
+        f"- Total Groups Ever: {snap['total_groups_all_time']}\n\n"
+        "CURRENT ACTIVITY\n"
+        f"- Active Users (1h): {snap['users_active_1h']}\n"
+        f"- Active Users (24h): {snap['users_active_24h']}\n"
+        f"- Active Groups (24h): {snap['groups_active_24h']}\n\n"
+        "LAST 24 HOURS\n"
+        f"- New Users: {snap['new_users_24h']}\n"
+        f"- New Groups: {snap['new_groups_24h']}\n"
+        f"- Total Events: {snap['events_24h']}\n"
+    )
+
+
+async def _get_vc_manager() -> VCManager:
+    global VC_MANAGER
+    if VC_MANAGER is not None:
+        return VC_MANAGER
+
+    async with VC_LOCK:
+        if VC_MANAGER is not None:
+            return VC_MANAGER
+        VC_MANAGER = VCManager(API_ID, API_HASH, ASSISTANT_SESSION)
+        await VC_MANAGER.start()
+        return VC_MANAGER
+
 # ========================= COMMAND HANDLERS ========================= #
 
 async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1477,7 +1523,7 @@ async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_T
         old_status = update.my_chat_member.old_chat_member.status
         
         # Check if bot was added to a group
-        if chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        if chat.type in [ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL]:
             # Bot was added to group
             if new_status in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR] and \
                old_status not in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR]:
@@ -4221,6 +4267,129 @@ async def chatid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await update.effective_message.reply_text("\n".join(lines))
 
 
+
+async def channelstats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send past/present usage summary to the log channel and caller."""
+    if update.effective_user.id != ADMIN_ID:
+        await update.effective_message.reply_text("Only owner can use this command.")
+        return
+
+    report = _build_channel_stats_report()
+    await _send_log_to_channel(context, report)
+    await update.effective_message.reply_text(report)
+
+
+async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Play music in Telegram voice chat using assistant + PyTgCalls."""
+    await _register_user_from_update(update)
+
+    if update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        await update.effective_message.reply_text("/vplay works in groups only.")
+        return
+
+    if not context.args:
+        await update.effective_message.reply_text("Usage: /vplay <song name or url>")
+        return
+
+    query = " ".join(context.args).strip()
+    status_msg = await update.effective_message.reply_text("Resolving track for voice chat...")
+
+    try:
+        vc = await _get_vc_manager()
+        requested_by = update.effective_user.first_name or "User"
+        mode, track = await vc.enqueue_or_play(update.effective_chat.id, query, requested_by)
+
+        if mode == "playing":
+            await status_msg.edit_text(
+                f"VC Now Playing\nTitle: {track.title}\nRequested by: {requested_by}\nSource: {track.webpage_url}"
+            )
+        else:
+            queue_len = len(vc.get_queue(update.effective_chat.id))
+            await status_msg.edit_text(
+                f"Added to VC queue\nTitle: {track.title}\nPosition: {queue_len}"
+            )
+
+        await _send_log_to_channel(
+            context,
+            (
+                "VC_PLAY\n"
+                f"Chat ID: {update.effective_chat.id}\n"
+                f"Query: {query}\n"
+                f"Mode: {mode}\n"
+                f"By: {update.effective_user.id}"
+            ),
+        )
+    except Exception as e:
+        await status_msg.edit_text(f"VC play failed: {e}")
+
+
+async def vstop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Stop voice chat playback and clear queue."""
+    await _register_user_from_update(update)
+
+    if update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        await update.effective_message.reply_text("/vstop works in groups only.")
+        return
+
+    try:
+        vc = await _get_vc_manager()
+        await vc.stop_chat(update.effective_chat.id)
+        await update.effective_message.reply_text("Voice chat playback stopped and queue cleared.")
+    except Exception as e:
+        await update.effective_message.reply_text(f"VC stop failed: {e}")
+
+
+async def vskip_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Skip current VC track and play next from queue."""
+    await _register_user_from_update(update)
+
+    if update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        await update.effective_message.reply_text("/vskip works in groups only.")
+        return
+
+    try:
+        vc = await _get_vc_manager()
+        next_track = await vc.skip(update.effective_chat.id)
+        if not next_track:
+            await update.effective_message.reply_text("Queue empty. Stopped current playback.")
+            return
+        await update.effective_message.reply_text(
+            f"Skipped.\nNow Playing: {next_track.title}\nRequested by: {next_track.requested_by}"
+        )
+    except Exception as e:
+        await update.effective_message.reply_text(f"VC skip failed: {e}")
+
+
+async def vqueue_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show voice chat queue."""
+    await _register_user_from_update(update)
+
+    if update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        await update.effective_message.reply_text("/vqueue works in groups only.")
+        return
+
+    try:
+        vc = await _get_vc_manager()
+        now_track = vc.get_now_playing(update.effective_chat.id)
+        queue = vc.get_queue(update.effective_chat.id)
+
+        lines = ["VC Queue"]
+        if now_track:
+            lines.append(f"Now: {now_track.title} (by {now_track.requested_by})")
+        else:
+            lines.append("Now: Nothing")
+
+        if not queue:
+            lines.append("Queue: Empty")
+        else:
+            lines.append("Queue:")
+            for i, item in enumerate(queue[:10], 1):
+                lines.append(f"{i}. {item.title} (by {item.requested_by})")
+
+        await update.effective_message.reply_text("\n".join(lines))
+    except Exception as e:
+        await update.effective_message.reply_text(f"VC queue failed: {e}")
+
 # ========================= GROUP SETTINGS COMMANDS ========================= #
 
 async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -5133,8 +5302,13 @@ async def post_init(app: Application) -> None:
 
 async def post_shutdown(app: Application) -> None:
     """Cleanup before shutdown"""
-    logger.info("👋 Bot shutting down...")
-
+    logger.info("Bot shutting down...")
+    global VC_MANAGER
+    if VC_MANAGER is not None:
+        try:
+            await VC_MANAGER.stop()
+        except Exception as e:
+            logger.warning(f"VC manager shutdown warning: {e}")
 
 def main() -> None:
     """Main function to run the bot"""
@@ -5212,6 +5386,7 @@ def main() -> None:
     application.add_handler(CommandHandler("groups", groups_command))
     application.add_handler(CommandHandler("members", members_command))
     application.add_handler(CommandHandler("dashboard", dashboard_command))
+    application.add_handler(CommandHandler("channelstats", channelstats_command))
     application.add_handler(CommandHandler("chatid", chatid_command))
     
     # Song download commands
@@ -5219,6 +5394,10 @@ def main() -> None:
     application.add_handler(CommandHandler("song", song_command))
     application.add_handler(CommandHandler("download", download_command))
     application.add_handler(CommandHandler("yt", yt_command))
+    application.add_handler(CommandHandler("vplay", vplay_command))
+    application.add_handler(CommandHandler("vqueue", vqueue_command))
+    application.add_handler(CommandHandler("vskip", vskip_command))
+    application.add_handler(CommandHandler("vstop", vstop_command))
     
     # Broadcast command (admin only)
     application.add_handler(CommandHandler("broadcast", broadcast_command))
@@ -5339,6 +5518,10 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
+
 
 
 
