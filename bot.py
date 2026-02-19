@@ -1332,6 +1332,12 @@ async def _get_vc_manager() -> VCManager:
     global VC_MANAGER
     if VC_MANAGER is not None:
         return VC_MANAGER
+    async with VC_LOCK:
+        if VC_MANAGER is not None:
+            return VC_MANAGER
+        VC_MANAGER = VCManager(VC_API_ID, VC_API_HASH, ASSISTANT_SESSION)
+        await VC_MANAGER.start()
+        return VC_MANAGER
 
 
 async def _is_assistant_in_chat_by_bot(
@@ -1352,13 +1358,6 @@ async def _is_assistant_in_chat_by_bot(
         }
     except Exception:
         return False
-
-    async with VC_LOCK:
-        if VC_MANAGER is not None:
-            return VC_MANAGER
-        VC_MANAGER = VCManager(VC_API_ID, VC_API_HASH, ASSISTANT_SESSION)
-        await VC_MANAGER.start()
-        return VC_MANAGER
 
 
 ALLOWED_CALC_OPS = {
