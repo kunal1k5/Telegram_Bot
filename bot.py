@@ -4542,6 +4542,40 @@ async def channelstats_command(update: Update, context: ContextTypes.DEFAULT_TYP
     await update.effective_message.reply_text(report)
 
 
+def _format_vc_duration(seconds: Optional[int]) -> str:
+    """Format VC duration seconds to M:SS / H:MM:SS."""
+    if not seconds or seconds <= 0:
+        return "Live"
+    h, rem = divmod(int(seconds), 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"
+
+
+def _vc_now_playing_card(track: Any, requested_by: str, download_mode: bool = False) -> str:
+    mode_badge = " (Download Mode)" if download_mode else ""
+    source_line = "Downloaded fallback audio" if download_mode else track.webpage_url
+    return (
+        f"🎧 **RESSO STYLE PLAYER{mode_badge}**\n\n"
+        f"♫ **Now Playing**\n"
+        f"🎵 **Title:** {track.title}\n"
+        f"🕒 **Duration:** {_format_vc_duration(getattr(track, 'duration', None))}\n"
+        f"👤 **Requested by:** {requested_by}\n"
+        f"🔗 **Source:** {source_line}"
+    )
+
+
+def _vc_queue_card(track: Any, position: int, download_mode: bool = False) -> str:
+    mode_badge = " (Download Mode)" if download_mode else ""
+    return (
+        f"📜 **Added to Queue{mode_badge}**\n\n"
+        f"🎵 **Title:** {track.title}\n"
+        f"🕒 **Duration:** {_format_vc_duration(getattr(track, 'duration', None))}\n"
+        f"🔢 **Position:** {position}"
+    )
+
+
 def _pkg_version(name: str) -> str:
     """Return installed package version or not-installed marker."""
     try:
@@ -4727,19 +4761,10 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         mode, track = await vc.enqueue_or_play(chat_id, query, requested_by)
 
         if mode == "playing":
-            await status_msg.edit_text(
-                f"\U0001F3B6 Started Streaming\n\n"
-                f"\U0001F3B5 Title: {track.title}\n"
-                f"\U0001F464 Requested by: {requested_by}\n"
-                f"\U0001F517 Source: {track.webpage_url}"
-            )
+            await status_msg.edit_text(_vc_now_playing_card(track, requested_by), parse_mode=ParseMode.MARKDOWN)
         else:
             queue_len = len(vc.get_queue(chat_id))
-            await status_msg.edit_text(
-                f"\U0001F4DC Added to Queue\n\n"
-                f"\U0001F3B5 Title: {track.title}\n"
-                f"\U0001F522 Position: {queue_len}"
-            )
+            await status_msg.edit_text(_vc_queue_card(track, queue_len), parse_mode=ParseMode.MARKDOWN)
 
         await _send_log_to_channel(
             context,
@@ -4793,20 +4818,18 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                         str(audio_file),
                         metadata.get("title", audio_file.stem),
                         requested_by,
+                        metadata.get("duration"),
                     )
                     if mode == "playing":
                         await status_msg.edit_text(
-                            f"\U0001F3B6 Started Streaming (Download Mode)\n\n"
-                            f"\U0001F3B5 Title: {track.title}\n"
-                            f"\U0001F464 Requested by: {requested_by}\n"
-                            f"\U0001F4E6 Source: downloaded audio fallback"
+                            _vc_now_playing_card(track, requested_by, download_mode=True),
+                            parse_mode=ParseMode.MARKDOWN,
                         )
                     else:
                         queue_len = len(vc.get_queue(update.effective_chat.id))
                         await status_msg.edit_text(
-                            f"\U0001F4DC Added to Queue (Download Mode)\n\n"
-                            f"\U0001F3B5 Title: {track.title}\n"
-                            f"\U0001F522 Position: {queue_len}"
+                            _vc_queue_card(track, queue_len, download_mode=True),
+                            parse_mode=ParseMode.MARKDOWN,
                         )
                     return
 
@@ -4868,7 +4891,8 @@ async def vskip_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await update.effective_message.reply_text("Queue empty. Stopped current playback.")
             return
         await update.effective_message.reply_text(
-            f"Skipped.\nNow Playing: {next_track.title}\nRequested by: {next_track.requested_by}"
+            "⏭️ **Track Skipped**\n\n" + _vc_now_playing_card(next_track, next_track.requested_by),
+            parse_mode=ParseMode.MARKDOWN,
         )
     except Exception as e:
         await update.effective_message.reply_text(f"VC skip failed: {e}")
@@ -4887,20 +4911,24 @@ async def vqueue_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         now_track = vc.get_now_playing(update.effective_chat.id)
         queue = vc.get_queue(update.effective_chat.id)
 
-        lines = ["VC Queue"]
+        lines = ["🎼 **RESSO STYLE QUEUE**"]
         if now_track:
-            lines.append(f"Now: {now_track.title} (by {now_track.requested_by})")
+            lines.append(
+                f"\n▶️ **Now:** {now_track.title}\n"
+                f"👤 By: {now_track.requested_by}\n"
+                f"🕒 {_format_vc_duration(now_track.duration)}"
+            )
         else:
-            lines.append("Now: Nothing")
+            lines.append("\n▶️ **Now:** Nothing")
 
         if not queue:
-            lines.append("Queue: Empty")
+            lines.append("\n📭 **Queue:** Empty")
         else:
-            lines.append("Queue:")
+            lines.append("\n📜 **Queue List:**")
             for i, item in enumerate(queue[:10], 1):
-                lines.append(f"{i}. {item.title} (by {item.requested_by})")
+                lines.append(f"{i}. {item.title} • {_format_vc_duration(item.duration)} • by {item.requested_by}")
 
-        await update.effective_message.reply_text("\n".join(lines))
+        await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         await update.effective_message.reply_text(f"VC queue failed: {e}")
 

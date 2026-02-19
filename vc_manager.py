@@ -15,6 +15,7 @@ class VCTrack:
     stream_url: str
     requested_by: str
     is_local: bool = False
+    duration: Optional[int] = None
 
 
 class VCManager:
@@ -372,12 +373,19 @@ class VCManager:
 
                     final_title = detailed.get("title") or candidate_title or "Unknown Title"
                     final_url = detailed.get("webpage_url") or candidate_url
+                    final_duration = detailed.get("duration")
+                    if not isinstance(final_duration, int):
+                        try:
+                            final_duration = int(final_duration) if final_duration else None
+                        except Exception:
+                            final_duration = None
                     return VCTrack(
                         title=final_title[:120],
                         webpage_url=final_url,
                         stream_url=stream_url,
                         requested_by=requested_by,
                         is_local=False,
+                        duration=final_duration,
                     )
                 except Exception as e:
                     err = str(e)
@@ -444,7 +452,12 @@ class VCManager:
         return "playing", track
 
     async def enqueue_or_play_local(
-        self, chat_id: int, file_path: str, title: str, requested_by: str
+        self,
+        chat_id: int,
+        file_path: str,
+        title: str,
+        requested_by: str,
+        duration: Optional[int] = None,
     ) -> tuple[str, VCTrack]:
         track = VCTrack(
             title=title[:120] if title else "Downloaded Track",
@@ -452,6 +465,7 @@ class VCManager:
             stream_url=file_path,
             requested_by=requested_by,
             is_local=True,
+            duration=duration,
         )
         if chat_id in self.now_playing:
             self.queues.setdefault(chat_id, []).append(track)
