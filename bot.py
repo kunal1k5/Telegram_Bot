@@ -17,7 +17,7 @@ random.seed()
 
 import httpx
 from google import genai
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Chat, ChatPermissions
+from telegram import BotCommand, Update, InlineKeyboardButton, InlineKeyboardMarkup, Chat, ChatPermissions
 from telegram.constants import ChatType, ParseMode, ChatMemberStatus
 from telegram.request import HTTPXRequest
 from telegram.ext import (
@@ -5565,6 +5565,39 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 # ========================= BOT LIFECYCLE ========================= #
 
+def _default_bot_commands() -> list[BotCommand]:
+    """Default command menu pushed to Telegram on startup."""
+    return [
+        BotCommand("start", "Open start menu"),
+        BotCommand("help", "Open help guide"),
+        BotCommand("play", "VC in group / file in private"),
+        BotCommand("song", "Search and send song"),
+        BotCommand("download", "Same as song"),
+        BotCommand("yt", "Download from YouTube link"),
+        BotCommand("vplay", "Play in voice chat"),
+        BotCommand("vqueue", "Show voice queue"),
+        BotCommand("vskip", "Skip current VC track"),
+        BotCommand("vstop", "Stop VC playback"),
+        BotCommand("vcguide", "Voice chat setup guide"),
+        BotCommand("chatid", "Show chat and user IDs"),
+        BotCommand("all", "Mention active users (group)"),
+        BotCommand("settings", "Open group settings"),
+        BotCommand("admin", "Show admin tools"),
+        BotCommand("warn", "Warn a replied user"),
+        BotCommand("warnings", "Show user warnings"),
+        BotCommand("resetwarn", "Reset user warnings"),
+        BotCommand("broadcast", "Broadcast text (owner)"),
+        BotCommand("broadcast_now", "Broadcast replied content (owner)"),
+        BotCommand("broadcastsong", "Broadcast song (owner)"),
+        BotCommand("dashboard", "Show analytics (owner)"),
+        BotCommand("channelstats", "Send usage report (owner)"),
+        BotCommand("users", "List users (owner)"),
+        BotCommand("groups", "List groups (owner)"),
+        BotCommand("members", "Show group members"),
+        BotCommand("stop", "Opt out from broadcasts"),
+    ]
+
+
 async def post_init(app: Application) -> None:
     """Run after bot initialization"""
     logger.info("ðŸš€ Bot initializing...")
@@ -5578,6 +5611,12 @@ async def post_init(app: Application) -> None:
     bot_info = await app.bot.get_me()
     logger.info(f"âœ… Bot started: @{bot_info.username}")
     logger.info("ðŸ’¬ Ready to chat!")
+    try:
+        await app.bot.set_my_commands(_default_bot_commands())
+        logger.info("Bot commands synced automatically")
+    except Exception as e:
+        logger.warning(f"Could not sync bot commands: {e}")
+
 
 
 async def post_shutdown(app: Application) -> None:
