@@ -1219,13 +1219,13 @@ START_TEXT: Final[str] = (
 )
 
 HELP_TEXT: Final[str] = (
-    "\U0001F496 *Baby Help Guide*\n\n"
-    "*\U0001F680 Basic Commands*\n"
+    "\U0001F496 Baby Help Guide\n\n"
+    "\U0001F680 Basic Commands\n"
     "/start - Open start menu\n"
     "/help - Open this help guide\n"
     "/chatid - Show chat/user IDs\n"
     "/vcguide - Voice chat setup guide\n\n"
-    "*\U0001F3B5 Music Commands*\n"
+    "\U0001F3B5 Music Commands\n"
     "/play <name> - In groups: VC play, in private: song file\n"
     "/song <name> - Search and send a song\n"
     "/download <name> - Same as /song\n"
@@ -1234,7 +1234,7 @@ HELP_TEXT: Final[str] = (
     "/vqueue - Show voice queue\n"
     "/vskip - Skip current VC song\n"
     "/vstop - Stop VC and clear queue\n\n"
-    "*\U0001F46E Group Admin Commands*\n"
+    "\U0001F46E Group Admin Commands\n"
     "/all <message> - Mention active users\n"
     "@all <message> - Quick mention\n"
     "/settings - Group settings\n"
@@ -1242,7 +1242,7 @@ HELP_TEXT: Final[str] = (
     "/warn <reason> - Warn replied user\n"
     "/warnings [reply/user_id] - Show warns\n"
     "/resetwarn [reply/user_id] - Reset warns\n\n"
-    "*\U0001F4E2 Owner Commands*\n"
+    "\U0001F4E2 Owner Commands\n"
     "/broadcast <msg> - Broadcast text\n"
     "/broadcast_now - Broadcast replied content\n"
     "/broadcastsong <name> - Broadcast a song\n"
@@ -1250,12 +1250,12 @@ HELP_TEXT: Final[str] = (
     "/channelstats - Send past/present usage report\n"
     "/users - List users\n"
     "/groups - List groups\n\n"
-    "*\u2699\uFE0F Voice Chat Requirements*\n"
+    "\u2699\uFE0F Voice Chat Requirements\n"
     "- VC streaming requires `ASSISTANT_SESSION` and API credentials.\n"
     "- You can use `VC_API_ID` + `VC_API_HASH` (preferred) or fallback `API_ID` + `API_HASH`.\n"
     "- In private chat, music commands send audio files. In groups, use VC commands for live playback.\n"
     "- For best results, make bot + assistant admins in VC groups.\n\n"
-    "*\U0001F9E0 AI Quick Tools* (chat trigger)\n"
+    "\U0001F9E0 AI Quick Tools (chat trigger)\n"
     "- `translate <text>`\n"
     "- `summarize <text>`\n"
     "- `calc <expression>`\n"
@@ -1280,6 +1280,34 @@ VC_MANAGER: Optional[VCManager] = None
 VC_LOCK = asyncio.Lock()
 
 # ========================= GEMINI AI HELPER ========================= #
+
+def _repair_mojibake_text(text: str) -> str:
+    """Best-effort fix for common mojibake like 'ðŸ˜‰' in model responses."""
+    if not text:
+        return text
+
+    fixed = text
+    if any(token in fixed for token in ("Ã", "Â", "ðŸ", "â€™", "â€œ", "â€")):
+        try:
+            repaired = fixed.encode("latin-1").decode("utf-8")
+            if repaired:
+                fixed = repaired
+        except Exception:
+            pass
+
+    replacements = {
+        "ðŸ˜‰": "😉",
+        "ðŸ˜Š": "😊",
+        "ðŸ˜…": "😅",
+        "ðŸ’–": "💖",
+        "âœ…": "✅",
+        "âŒ": "❌",
+        "âš ï¸": "⚠️",
+    }
+    for bad, good in replacements.items():
+        fixed = fixed.replace(bad, good)
+
+    return fixed.replace("�", "").strip()
 
 def _get_model_candidates() -> list[str]:
     """Get available Gemini models (using new google.genai API)"""
@@ -1439,7 +1467,7 @@ def get_ai_response(
     
     if openrouter_text:
         logger.info(f"âœ… OpenRouter succeeded: {len(openrouter_text)} chars")
-        return openrouter_text
+        return _repair_mojibake_text(openrouter_text)
     else:
         logger.error("âŒ OpenRouter API returned empty response")
         return "Sorry, couldn't get a response from OpenRouter. Please try again."
@@ -1741,7 +1769,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     await update.effective_message.reply_text(
         HELP_TEXT,
-        parse_mode=ParseMode.MARKDOWN,
         reply_markup=reply_markup,
     )
 
@@ -5095,7 +5122,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(
             HELP_TEXT,
-            parse_mode=ParseMode.MARKDOWN,
             reply_markup=reply_markup,
         )
 
