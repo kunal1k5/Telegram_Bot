@@ -1230,6 +1230,7 @@ HELP_TEXT: Final[str] = """
   (Photo, Video, Audio, Document sb bhej sakte ho!)
 /broadcastsong <name> - Ek song sab users+groups ko bhejo
 /dashboard - Live DB analytics dekho
+/chatid - Current chat/user id dekho
 /admin - Admin commands dekho 👮
 /del - Message delete karo
 /ban, /mute - User manage karo
@@ -4198,6 +4199,32 @@ async def broadcastsong_command(update: Update, context: ContextTypes.DEFAULT_TY
         _cleanup_downloads(temp_dir)
 
 
+async def chatid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show current chat and sender IDs for quick setup/debug."""
+    await _register_user_from_update(update)
+
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if not chat:
+        await update.effective_message.reply_text("Chat info available nahi hai.")
+        return
+
+    lines = [
+        "Chat Info",
+        f"Chat ID: {chat.id}",
+        f"Chat Type: {chat.type}",
+        f"Chat Title: {chat.title or 'N/A'}",
+        f"Chat Username: @{chat.username}" if chat.username else "Chat Username: None",
+    ]
+
+    if user:
+        lines.append(f"User ID: {user.id}")
+        lines.append(f"User Username: @{user.username}" if user.username else "User Username: None")
+
+    await update.effective_message.reply_text("\n".join(lines))
+
+
 # ========================= GROUP SETTINGS COMMANDS ========================= #
 
 async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -5156,6 +5183,7 @@ def main() -> None:
     application.add_handler(CommandHandler("groups", groups_command))
     application.add_handler(CommandHandler("members", members_command))
     application.add_handler(CommandHandler("dashboard", dashboard_command))
+    application.add_handler(CommandHandler("chatid", chatid_command))
     
     # Song download commands
     application.add_handler(CommandHandler("song", song_command))
@@ -5281,6 +5309,8 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
 
 
 
