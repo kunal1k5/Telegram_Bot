@@ -183,6 +183,9 @@ DEFAULT_GROUP_SETTINGS = {
     "allow_forwards": True,
     "remove_bot_links": True,
     "welcome_message": True,
+    "goodbye_message": False,
+    "rules_text": "",
+    "reports_enabled": True,
     "antiflood_enabled": True,
     "max_message_length": 4000,
 }
@@ -2691,22 +2694,25 @@ async def bye_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def welcome_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /welcome command"""
-    # Register user
+    """Handle /welcome command (greeting or toggle in groups)."""
     await _register_user(update.effective_user.id)
-    
-    user_name = update.effective_user.first_name or "Bhai"
-    logger.info(f"/welcome command - user={user_name}")
-    
-    welcome_messages = [
-        f"Welcome {user_name}! ðŸŽ‰ Tu mera group/chat mein aa gaya! Masti karega na? ðŸ˜„",
-        f"Arre welcome! ðŸ‘‹ {user_name} aa gaya party mein! Chai-samosa? â˜•",
-        f"Welcome aboard! ðŸš€ {user_name}, tu bilkul right jagah pe aa gaya ðŸ˜Š",
-        f"Namaste {user_name}! ðŸ™ Tere liye mera welcome tyyari tha! Enjoy karo ðŸ˜„",
-    ]
-    
-    message = random.choice(welcome_messages)
-    await update.effective_message.reply_text(message)
+
+    if (
+        update.effective_chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]
+        and context.args
+        and context.args[0].lower() in {"on", "off"}
+    ):
+        ok, err = await _check_bot_and_user_admin(update, context)
+        if not ok:
+            await update.effective_message.reply_text(err)
+            return
+        val = context.args[0].lower() == "on"
+        update_group_setting(update.effective_chat.id, "welcome_message", val)
+        await update.effective_message.reply_text(f"? Welcome messages {'enabled' if val else 'disabled'}.")
+        return
+
+    user_name = update.effective_user.first_name or "User"
+    await update.effective_message.reply_text(f"?? Welcome {user_name}!")
 
 
 async def thanks_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3258,6 +3264,328 @@ async def _check_bot_and_user_admin(update: Update, context: ContextTypes.DEFAUL
     except Exception as e:
         logger.error(f"Admin check error: {e}")
         return False, "âŒ Permission check mein problem aa gayi! ðŸ˜…"
+
+
+def _parse_duration_seconds(value: str) -> Optional[int]:
+    """Parse duration like 10m/2h/1d. Returns seconds or None."""
+    try:
+        token = (value or "").strip().lower()
+        if token.endswith("m"):
+            return int(token[:-1]) * 60
+        if token.endswith("h"):
+            return int(token[:-1]) * 3600
+        if token.endswith("d"):
+            return int(token[:-1]) * 86400
+        if token.isdigit():
+            return int(token) * 60
+    except Exception:
+        return None
+    return None
+
+
+async def kick_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Rose-style /kick (reply-based): remove user, allow rejoin."""
+    await _register_user(update.effective_user.id)
+    if not update.message.reply_to_message:
+        await update.effective_message.reply_text("Reply to a user with /kick.")
+        return
+    ok, err = await _check_bot_and_user_admin(update, context)
+    if not ok:
+        await update.effective_message.reply_text(err)
+        return
+
+    target = update.message.reply_to_message.from_user
+    try:
+        await context.bot.ban_chat_member(update.effective_chat.id, target.id)
+        await context.bot.unban_chat_member(update.effective_chat.id, target.id, only_if_banned=True)
+        await update.effective_message.reply_text(f"? Kicked: {target.first_name or target.id}")
+    except Exception as e:
+        await update.effective_message.reply_text(f"? Kick failed: {e}")
+
+
+async def kickme_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """User self-kick command."""
+    if update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        await update.effective_message.reply_text("/kickme works in groups only.")
+        return
+    try:
+        uid = update.effective_user.id
+        await context.bot.ban_chat_member(update.effective_chat.id, uid)
+        await context.bot.unban_chat_member(update.effective_chat.id, uid, only_if_banned=True)
+    except Exception as e:
+        await update.effective_message.reply_text(f"Could not kick you: {e}")
+
+
+async def tmute_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Alias to /mute with duration."""
+    await mute_command(update, context)
+
+
+async def tban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Temporary ban: /tban 1h (reply-based)."""
+    await _register_user(update.effective_user.id)
+    if not update.message.reply_to_message:
+        await update.effective_message.reply_text("Reply to a user and use /tban <10m|1h|1d>.")
+        return
+    ok, err = await _check_bot_and_user_admin(update, context)
+    if not ok:
+        await update.effective_message.reply_text(err)
+        return
+
+    secs = _parse_duration_seconds(context.args[0]) if context.args else None
+    if not secs:
+        await update.effective_message.reply_text("Usage: /tban <10m|1h|1d> (reply to user).")
+        return
+
+    from datetime import datetime, timedelta
+    target = update.message.reply_to_message.from_user
+    try:
+        until = datetime.now() + timedelta(seconds=secs)
+        await context.bot.ban_chat_member(update.effective_chat.id, target.id, until_date=until)
+        await update.effective_message.reply_text(f"? Temp banned {target.first_name or target.id} for {context.args[0]}.")
+    except Exception as e:
+        await update.effective_message.reply_text(f"? tban failed: {e}")
+
+
+async def purge_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Bulk delete messages by reply range or count."""
+    await _register_user(update.effective_user.id)
+    ok, err = await _check_bot_and_user_admin(update, context)
+    if not ok:
+        await update.effective_message.reply_text(err)
+        return
+
+    chat_id = update.effective_chat.id
+    cmd_msg_id = update.effective_message.message_id
+    deleted = 0
+    try:
+        if update.message.reply_to_message:
+            start_id = update.message.reply_to_message.message_id
+            for mid in range(start_id, cmd_msg_id + 1):
+                try:
+                    await context.bot.delete_message(chat_id=chat_id, message_id=mid)
+                    deleted += 1
+                except Exception:
+                    pass
+        else:
+            count = 50
+            if context.args and context.args[0].isdigit():
+                count = max(1, min(int(context.args[0]), 500))
+            for i in range(count):
+                mid = cmd_msg_id - i
+                try:
+                    await context.bot.delete_message(chat_id=chat_id, message_id=mid)
+                    deleted += 1
+                except Exception:
+                    pass
+        if deleted:
+            await context.bot.send_message(chat_id=chat_id, text=f"?? Purged {deleted} messages.")
+    except Exception as e:
+        await update.effective_message.reply_text(f"Purge failed: {e}")
+
+
+async def setrules_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set group rules text."""
+    ok, err = await _check_bot_and_user_admin(update, context)
+    if not ok:
+        await update.effective_message.reply_text(err)
+        return
+    rules_text = ""
+    if update.message.reply_to_message and update.message.reply_to_message.text:
+        rules_text = update.message.reply_to_message.text
+    elif context.args:
+        rules_text = " ".join(context.args)
+    if not rules_text:
+        await update.effective_message.reply_text("Usage: /setrules <text> or reply to a rules message.")
+        return
+    update_group_setting(update.effective_chat.id, "rules_text", rules_text[:4000])
+    await update.effective_message.reply_text("? Rules saved.")
+
+
+async def rules_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    rules_text = str(get_group_setting(update.effective_chat.id, "rules_text") or "").strip()
+    if not rules_text:
+        await update.effective_message.reply_text("No rules set yet.")
+        return
+    await update.effective_message.reply_text(f"?? Group Rules\n\n{rules_text}")
+
+
+async def clearrules_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    ok, err = await _check_bot_and_user_admin(update, context)
+    if not ok:
+        await update.effective_message.reply_text(err)
+        return
+    update_group_setting(update.effective_chat.id, "rules_text", "")
+    await update.effective_message.reply_text("? Rules cleared.")
+
+
+async def goodbye_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Toggle goodbye messages: /goodbye on|off."""
+    if update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        await update.effective_message.reply_text("/goodbye works in groups only.")
+        return
+    ok, err = await _check_bot_and_user_admin(update, context)
+    if not ok:
+        await update.effective_message.reply_text(err)
+        return
+    if not context.args or context.args[0].lower() not in {"on", "off"}:
+        state = "ON" if get_group_setting(update.effective_chat.id, "goodbye_message") else "OFF"
+        await update.effective_message.reply_text(f"Usage: /goodbye on|off\nCurrent: {state}")
+        return
+    val = context.args[0].lower() == "on"
+    update_group_setting(update.effective_chat.id, "goodbye_message", val)
+    await update.effective_message.reply_text(f"? Goodbye messages {'enabled' if val else 'disabled'}.")
+
+
+async def reports_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Toggle reports: /reports on|off."""
+    if update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        await update.effective_message.reply_text("/reports works in groups only.")
+        return
+    ok, err = await _check_bot_and_user_admin(update, context)
+    if not ok:
+        await update.effective_message.reply_text(err)
+        return
+    if not context.args or context.args[0].lower() not in {"on", "off"}:
+        state = "ON" if get_group_setting(update.effective_chat.id, "reports_enabled") else "OFF"
+        await update.effective_message.reply_text(f"Usage: /reports on|off\nCurrent: {state}")
+        return
+    val = context.args[0].lower() == "on"
+    update_group_setting(update.effective_chat.id, "reports_enabled", val)
+    await update.effective_message.reply_text(f"? Reports {'enabled' if val else 'disabled'}.")
+
+
+async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Report replied message to admins."""
+    if update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        await update.effective_message.reply_text("/report works in groups only.")
+        return
+    if not get_group_setting(update.effective_chat.id, "reports_enabled"):
+        return
+    if not update.message.reply_to_message:
+        await update.effective_message.reply_text("Reply to a message and use /report.")
+        return
+    try:
+        admins = await context.bot.get_chat_administrators(update.effective_chat.id)
+        mentions = []
+        for m in admins[:6]:
+            u = m.user
+            if u.is_bot:
+                continue
+            mentions.append(f"@{u.username}" if u.username else (u.first_name or "admin"))
+        who = update.effective_user.first_name or "User"
+        await update.effective_message.reply_text(
+            f"?? Report by {who}\nAdmins: {', '.join(mentions) if mentions else 'No admins found'}"
+        )
+    except Exception as e:
+        await update.effective_message.reply_text(f"Report failed: {e}")
+
+
+async def flood_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show flood/spam settings."""
+    if update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        await update.effective_message.reply_text("/flood works in groups only.")
+        return
+    threshold = int(get_group_setting(update.effective_chat.id, "spam_threshold") or 5)
+    enabled = bool(get_group_setting(update.effective_chat.id, "spam_protection"))
+    await update.effective_message.reply_text(
+        f"Flood settings\nSpam protection: {'ON' if enabled else 'OFF'}\nThreshold: {threshold} msgs / 10s"
+    )
+
+
+async def setflood_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set flood threshold: /setflood 5"""
+    ok, err = await _check_bot_and_user_admin(update, context)
+    if not ok:
+        await update.effective_message.reply_text(err)
+        return
+    if not context.args or not context.args[0].isdigit():
+        await update.effective_message.reply_text("Usage: /setflood <number>")
+        return
+    val = max(1, min(int(context.args[0]), 30))
+    update_group_setting(update.effective_chat.id, "spam_threshold", val)
+    update_group_setting(update.effective_chat.id, "spam_protection", True)
+    await update.effective_message.reply_text(f"? Flood threshold set to {val}.")
+
+
+def _lock_key_from_type(lock_type: str) -> Optional[str]:
+    m = {
+        "url": "allow_links",
+        "link": "allow_links",
+        "sticker": "allow_stickers",
+        "gif": "allow_gifs",
+        "forward": "allow_forwards",
+        "forwards": "allow_forwards",
+        "bot": "remove_bot_links",
+        "botlinks": "remove_bot_links",
+    }
+    return m.get(lock_type.lower())
+
+
+async def lock_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    ok, err = await _check_bot_and_user_admin(update, context)
+    if not ok:
+        await update.effective_message.reply_text(err)
+        return
+    if not context.args:
+        await update.effective_message.reply_text("Usage: /lock <url|sticker|gif|forward|botlinks>")
+        return
+    key = _lock_key_from_type(context.args[0])
+    if not key:
+        await update.effective_message.reply_text("Unknown lock type. Use /locktypes.")
+        return
+    value = False if key != "remove_bot_links" else True
+    update_group_setting(update.effective_chat.id, key, value)
+    await update.effective_message.reply_text(f"? Locked: {context.args[0]}")
+
+
+async def unlock_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    ok, err = await _check_bot_and_user_admin(update, context)
+    if not ok:
+        await update.effective_message.reply_text(err)
+        return
+    if not context.args:
+        await update.effective_message.reply_text("Usage: /unlock <url|sticker|gif|forward|botlinks>")
+        return
+    key = _lock_key_from_type(context.args[0])
+    if not key:
+        await update.effective_message.reply_text("Unknown lock type. Use /locktypes.")
+        return
+    value = True if key != "remove_bot_links" else False
+    update_group_setting(update.effective_chat.id, key, value)
+    await update.effective_message.reply_text(f"? Unlocked: {context.args[0]}")
+
+
+async def locks_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    gid = update.effective_chat.id
+    await update.effective_message.reply_text(
+        "Current locks\n"
+        f"url: {'LOCKED' if not get_group_setting(gid, 'allow_links') else 'OPEN'}\n"
+        f"sticker: {'LOCKED' if not get_group_setting(gid, 'allow_stickers') else 'OPEN'}\n"
+        f"gif: {'LOCKED' if not get_group_setting(gid, 'allow_gifs') else 'OPEN'}\n"
+        f"forward: {'LOCKED' if not get_group_setting(gid, 'allow_forwards') else 'OPEN'}\n"
+        f"botlinks: {'LOCKED' if get_group_setting(gid, 'remove_bot_links') else 'OPEN'}"
+    )
+
+
+async def locktypes_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.effective_message.reply_text("Lock types: url, sticker, gif, forward, botlinks")
+
+
+async def adminlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        await update.effective_message.reply_text("/adminlist works in groups only.")
+        return
+    try:
+        admins = await context.bot.get_chat_administrators(update.effective_chat.id)
+        lines = ["?? Admin List"]
+        for i, m in enumerate(admins, 1):
+            u = m.user
+            name = f"@{u.username}" if u.username else (u.first_name or str(u.id))
+            lines.append(f"{i}. {name}")
+        await update.effective_message.reply_text("\n".join(lines))
+    except Exception as e:
+        await update.effective_message.reply_text(f"Could not fetch admins: {e}")
 
 
 async def del_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -5251,6 +5579,22 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 # ========================= MESSAGE HANDLERS ========================= #
 
+async def goodbye_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send goodbye message when a member leaves (if enabled)."""
+    if not update.message or not update.message.left_chat_member or not update.effective_chat:
+        return
+    if update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        return
+
+    chat = update.effective_chat
+    if not get_group_setting(chat.id, "goodbye_message"):
+        return
+
+    member = update.message.left_chat_member
+    name = member.first_name or "User"
+    await update.effective_message.reply_text(f"?? Goodbye {name}. Take care!")
+
+
 async def welcome_new_members_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Rose-style welcome handler for new members."""
     if not update.message or not update.message.new_chat_members or not update.effective_chat:
@@ -5610,6 +5954,14 @@ def _default_bot_commands() -> list[BotCommand]:
         BotCommand("users", "List users (owner)"),
         BotCommand("groups", "List groups (owner)"),
         BotCommand("members", "Show group members"),
+        BotCommand("kick", "Kick replied user"),
+        BotCommand("tmute", "Mute replied user temporarily"),
+        BotCommand("tban", "Ban replied user temporarily"),
+        BotCommand("purge", "Bulk delete messages"),
+        BotCommand("rules", "Show group rules"),
+        BotCommand("report", "Report replied message"),
+        BotCommand("locks", "Show current locks"),
+        BotCommand("flood", "Show flood settings"),
         BotCommand("stop", "Opt out from broadcasts"),
     ]
 
@@ -5797,6 +6149,24 @@ def main() -> None:
     application.add_handler(CommandHandler("demote", demote_command))
     application.add_handler(CommandHandler("pin", pin_command))
     application.add_handler(CommandHandler("unpin", unpin_command))
+    application.add_handler(CommandHandler("kick", kick_command))
+    application.add_handler(CommandHandler("kickme", kickme_command))
+    application.add_handler(CommandHandler("tmute", tmute_command))
+    application.add_handler(CommandHandler("tban", tban_command))
+    application.add_handler(CommandHandler("purge", purge_command))
+    application.add_handler(CommandHandler("setrules", setrules_command))
+    application.add_handler(CommandHandler("rules", rules_command))
+    application.add_handler(CommandHandler("clearrules", clearrules_command))
+    application.add_handler(CommandHandler("goodbye", goodbye_command))
+    application.add_handler(CommandHandler("reports", reports_command))
+    application.add_handler(CommandHandler("report", report_command))
+    application.add_handler(CommandHandler("flood", flood_command))
+    application.add_handler(CommandHandler("setflood", setflood_command))
+    application.add_handler(CommandHandler("lock", lock_command))
+    application.add_handler(CommandHandler("unlock", unlock_command))
+    application.add_handler(CommandHandler("locks", locks_command))
+    application.add_handler(CommandHandler("locktypes", locktypes_command))
+    application.add_handler(CommandHandler("adminlist", adminlist_command))
     
     # Register callback handlers for inline buttons
     # Settings callbacks (higher priority)
@@ -5812,6 +6182,12 @@ def main() -> None:
         MessageHandler(
             filters.StatusUpdate.NEW_CHAT_MEMBERS,
             welcome_new_members_handler,
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.StatusUpdate.LEFT_CHAT_MEMBER,
+            goodbye_member_handler,
         )
     )
 
