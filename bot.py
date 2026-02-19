@@ -154,7 +154,7 @@ def _save_opted_out_users(user_ids: Set[int]) -> None:
 # In-memory set of opted-out users
 OPTED_OUT_USERS: Set[int] = _load_opted_out_users()
 
-# Language preferences per user: {user_id: "hindi" | "english" | "hinglish"}
+# Language preferences per user: {user_id: "auto" | "english" | "hinglish"}
 LANGUAGE_PREFERENCES: Dict[int, str] = {}
 
 # ========================= GROUP SETTINGS SYSTEM ========================= #
@@ -1185,75 +1185,54 @@ Make them smile. Make them feel heard. Have fun with them. ❤️
 
 # Start message
 START_TEXT: Final[str] = """
-💕 *Heyy! Main Baby hoon* 💕
+💕 *Hey! I'm Baby* 💕
 
-Tumhara friendly dost jo hamesha chat ke liye ready hai! 😊
+Your friendly companion, always ready to chat. 😊
 
-*Main kya kar sakti hoon:*
-💬 Dil se baat karna
-🎵 Songs download karna
-😄 Mazedaar conversations
-🤗 Help aur support
+*What I can do:*
+💬 Have real conversations
+🎵 Find and send songs
+😄 Fun interactions
+🤗 Help and support
 
-Bas mujhe message karo, let's chat! ✨
+Send me a message and let's talk! ✨
 """
 
 HELP_TEXT: Final[str] = """
-💕 *Baby's Help Guide* 💕
+💕 *Baby Help Guide* 💕
 
 *Basic Commands:*
-/start - Shuru karo chat! ✨
-/help - Ye menu dekho
+/start - Start the bot
+/help - Open this help menu
 
-*Greeting Commands:*
-/gm - Good morning! ☀️
-/gn - Good night! 🌙
-/bye - Bye bye 👋
-/welcome - Welcome greeting 🎉
-/thanks - Aww, thanks! 🥰
-/sorry - It's okay! 😊
-/mood - Mood kya hai? 🎭
-
-*Song Download (New!):*
-/song <name> - Gaana dhundh ke dunga 🎵
+*Music Commands:*
+/play <name> - Alias of /song
+/song <name> - Search and send a song
 /download <name> - Same as /song
-/yt <link> - YouTube link se download
+/yt <link> - Download from a YouTube link
 
-*Group Commands (Admin only):*
-/all <message> - Sabko tag karo
-@all <message> - Quick tag
-/settings - Group settings change karo ⚙️
+*Group Commands (Admin):*
+/all <message> - Mention active users
+@all <message> - Quick mention
+/settings - Group settings
+/admin - Admin tools list
+/warn <reason> - Warn replied user
+/warnings [reply/user_id] - Show warns
+/resetwarn [reply/user_id] - Reset warns
 
-*Admin Commands (Owner only):*
-/broadcast <msg> - Text broadcast sabko 📢
-/broadcast_now - Reply karo content reply se 📹
-  (Photo, Video, Audio, Document sb bhej sakte ho!)
-/broadcastsong <name> - Ek song sab users+groups ko bhejo
-/dashboard - Live DB analytics dekho
-/chatid - Current chat/user id dekho
-/admin - Admin commands dekho 👮
-/del - Message delete karo
-/ban, /mute - User manage karo
-/warn, /warnings, /resetwarn - Warning system
+*Owner Commands:*
+/broadcast <msg> - Broadcast text
+/broadcast_now - Broadcast replied content
+/broadcastsong <name> - Broadcast a song
+/dashboard - Live analytics
+/chatid - Show chat/user IDs
+/users - List users
+/groups - List groups
 
-*Broadcast Usage:*
-Method 1 - Text: /broadcast Your message here
-Method 2 - Media: 
-  • Photo/Video/Audio/Doc bhejo
-  • Uske reply mein type karo: /broadcast_now
-  • Sabko mil jayega! 💕
-
-*How to use:*
-• *Private Chat:* Bas message karo ya commands use karo!
-• *Groups:* Mention karo (@AnimxClanBot) ya reply karo
-
-*Tips:*
-• Hinglish mein baat karo, maza aayega! 🤗
-• Kuch bhi pucho, main hoon na
-• Songs chahiye? Use /song command
-• Owner ho? Broadcast karke sabko content bhej! 📢
-
-Made with ❤️ by Baby
+*Notes:*
+- You can chat in any language.
+- In groups, mention the bot or reply to the bot for AI chat.
+- For voice chat (VC) music streaming, this bot currently sends audio files, not live VC streams.
 """
 
 # Windows async fix
@@ -2120,6 +2099,18 @@ async def song_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def download_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /download command - Same as /song"""
+    await song_command(update, context)
+
+
+async def play_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Alias for /song. (This bot sends audio file, not live VC stream.)"""
+    if not context.args:
+        await update.effective_message.reply_text(
+            "Use: /play <song name>\n"
+            "This command sends song audio in chat.\n"
+            "Live VC streaming is not enabled in this bot build."
+        )
+        return
     await song_command(update, context)
 
 
@@ -3874,70 +3865,62 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /users command - Show detailed user list (admin only)"""
     user_id = update.effective_user.id
-    
-    # Check if user is admin
+
     if user_id != ADMIN_ID:
         await update.effective_message.reply_text(
-            "🔐 Oops! Sirf admin hi user list dekh sakte hain. 😅"
+            "Only owner can view user list."
         )
         return
-    
-    total_users = len(USERS_DATABASE)
-    
+
+    all_users = BOT_DB.get_all_users()
+    total_users = len(all_users)
+
     if total_users == 0:
-        await update.effective_message.reply_text(
-            "❌ Koi bhi user nahi hai abhi! 😅"
-        )
+        await update.effective_message.reply_text("No users found yet.")
         return
-    
-    # Sort users by join date (newest first)
-    users_by_join = sorted(
-        USERS_DATABASE.items(),
-        key=lambda x: x[1].get('join_date', 0),
-        reverse=True
-    )
-    
+
     current_time = time.time()
-    users_text = f"👥 **ALL USERS** ({total_users} Total)\n" + "=" * 50 + "\n\n"
-    
-    for idx, (uid, user_info) in enumerate(users_by_join, 1):
-        name = user_info.get('first_name', 'Unknown')
-        username = user_info.get('username', 'N/A')
-        join_date = user_info.get('join_date', 0)
-        last_seen = user_info.get('last_seen', 0)
-        
-        # Format dates
-        days_since_join = int((current_time - join_date) / 86400)
-        hours_since_seen = int((current_time - last_seen) / 3600)
-        
-        if hours_since_seen < 1:
+    users_text = f"ALL USERS ({total_users} Total)\n" + "=" * 50 + "\n\n"
+
+    for idx, user_info in enumerate(all_users, 1):
+        uid = int(user_info.get("user_id", 0))
+        name = user_info.get("first_name", "Unknown")
+        username = user_info.get("username")
+        join_date = float(user_info.get("join_date", 0) or 0)
+        last_seen = float(user_info.get("last_seen", 0) or 0)
+
+        days_since_join = int((current_time - join_date) / 86400) if join_date else -1
+        hours_since_seen = int((current_time - last_seen) / 3600) if last_seen else -1
+
+        if hours_since_seen < 0:
+            last_seen_str = "unknown"
+        elif hours_since_seen < 1:
             last_seen_str = "just now"
         elif hours_since_seen < 24:
             last_seen_str = f"{hours_since_seen}h ago"
         else:
-            days_since_seen = hours_since_seen // 24
-            last_seen_str = f"{days_since_seen}d ago"
-        
-        opted_out = "🔒 (Opted-out)" if uid in OPTED_OUT_USERS else ""
-        
+            last_seen_str = f"{hours_since_seen // 24}d ago"
+
+        joined_str = f"{days_since_join}d ago" if days_since_join >= 0 else "unknown"
+        opted_out = "(Opted-out)" if uid in OPTED_OUT_USERS else ""
+        username_text = f"@{username}" if username and username != "None" else "None"
+
         users_text += (
-            f"{idx}. **{name}** {opted_out}\n"
+            f"{idx}. {name} {opted_out}\n"
             f"   ID: {uid}\n"
-            f"   Username: @{username}\n"
-            f"   Joined: {days_since_join}d ago\n"
+            f"   Username: {username_text}\n"
+            f"   Joined: {joined_str}\n"
             f"   Last Seen: {last_seen_str}\n\n"
         )
-        
-        # Split into messages every 20 users
-        if idx % 20 == 0:
-            await update.effective_message.reply_text(users_text, parse_mode=ParseMode.MARKDOWN)
-            users_text = ""
-    
-    if users_text:
-        await update.effective_message.reply_text(users_text, parse_mode=ParseMode.MARKDOWN)
-    
-    logger.info(f"User list shown to admin {update.effective_user.first_name}")
 
+        if idx % 20 == 0:
+            await update.effective_message.reply_text(users_text)
+            users_text = ""
+
+    if users_text:
+        await update.effective_message.reply_text(users_text)
+
+    logger.info(f"User list shown to admin {update.effective_user.first_name}")
 
 async def groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /groups command - Show detailed group list (admin only)"""
@@ -4884,12 +4867,14 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
         logger.info(f"User {user_id} set language to: hinglish")
     
     # Build system prompt with language preference
-    user_lang = LANGUAGE_PREFERENCES.get(user_id, "hinglish")
+    user_lang = LANGUAGE_PREFERENCES.get(user_id, "auto")
     lang_instruction = f"\nUSER LANGUAGE PREFERENCE: {user_lang.upper()}"
     if user_lang == "english":
         lang_instruction += "\nReply ONLY in English."
     elif user_lang == "hinglish":
         lang_instruction += "\nReply in Hinglish (mix of Hindi and English)."
+    else:
+        lang_instruction += "\nReply in the same language used by the user message."
     
     system_prompt_with_lang = SYSTEM_PROMPT + lang_instruction
     
@@ -5034,12 +5019,14 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             logger.info(f"User {user_id} set language to: hinglish")
         
         # Build system prompt with language preference
-        user_lang = LANGUAGE_PREFERENCES.get(user_id, "hinglish")
+        user_lang = LANGUAGE_PREFERENCES.get(user_id, "auto")
         lang_instruction = f"\n[User language: {user_lang.upper()}]"
         if user_lang == "english":
             lang_instruction += " Reply ONLY in English."
         elif user_lang == "hinglish":
             lang_instruction += " Reply in Hinglish."
+        else:
+            lang_instruction += " Reply in the same language used by the user message."
         
         system_prompt_with_lang = SYSTEM_PROMPT + lang_instruction
         
@@ -5186,6 +5173,7 @@ def main() -> None:
     application.add_handler(CommandHandler("chatid", chatid_command))
     
     # Song download commands
+    application.add_handler(CommandHandler("play", play_command))
     application.add_handler(CommandHandler("song", song_command))
     application.add_handler(CommandHandler("download", download_command))
     application.add_handler(CommandHandler("yt", yt_command))
@@ -5309,6 +5297,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
 

@@ -199,6 +199,17 @@ class BotDatabase:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def get_all_users(self) -> list[dict[str, Any]]:
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT user_id, username, first_name, join_date, last_seen, message_count
+                FROM users
+                ORDER BY join_date DESC
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def add_warn(self, group_id: int, user_id: int, warned_by: int, reason: str) -> int:
         now = time.time()
         with self._lock, self._connect() as conn:
