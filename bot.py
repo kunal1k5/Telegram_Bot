@@ -50,6 +50,8 @@ OPENAI_API_KEY: Final[str] = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL: Final[str] = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 API_ID: Final[int] = int(os.getenv("API_ID", "0"))
 API_HASH: Final[str] = os.getenv("API_HASH", "")
+VC_API_ID: Final[int] = int(os.getenv("VC_API_ID", str(API_ID)))
+VC_API_HASH: Final[str] = os.getenv("VC_API_HASH", API_HASH)
 ASSISTANT_SESSION: Final[str] = os.getenv("ASSISTANT_SESSION", "")
 
 if not BOT_TOKEN:
@@ -1247,7 +1249,8 @@ HELP_TEXT: Final[str] = (
     "/users - List users\n"
     "/groups - List groups\n\n"
     "*\u2699\uFE0F Voice Chat Requirements*\n"
-    "- VC streaming requires `API_ID`, `API_HASH`, and `ASSISTANT_SESSION` to be configured.\n"
+    "- VC streaming requires `ASSISTANT_SESSION` and API credentials.\n"
+    "- You can use `VC_API_ID` + `VC_API_HASH` (preferred) or fallback `API_ID` + `API_HASH`.\n"
     "- In private chat, music commands send audio files. In groups, use VC commands for live playback.\n"
     "- For best results, make bot + assistant admins in VC groups.\n\n"
     "*\U0001F9E0 AI Quick Tools* (chat trigger)\n"
@@ -1518,7 +1521,7 @@ async def _get_vc_manager() -> VCManager:
     async with VC_LOCK:
         if VC_MANAGER is not None:
             return VC_MANAGER
-        VC_MANAGER = VCManager(API_ID, API_HASH, ASSISTANT_SESSION)
+        VC_MANAGER = VCManager(VC_API_ID, VC_API_HASH, ASSISTANT_SESSION)
         await VC_MANAGER.start()
         return VC_MANAGER
 
