@@ -4795,7 +4795,37 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         VC_ASSISTANT_PRESENT_CACHE[chat_id] = now_ts
 
         requested_by = update.effective_user.first_name or "User"
-        mode, track = await vc.enqueue_or_play(chat_id, query, requested_by)
+        try:
+            mode, track = await vc.enqueue_or_play(chat_id, query, requested_by)
+        except Exception as play_exc:
+            play_err = str(play_exc).lower()
+            if "peer id invalid" in play_err:
+                # Assistant peer cache/session mismatch: force one recovery cycle.
+                VC_ASSISTANT_PRESENT_CACHE.pop(chat_id, None)
+                try:
+                    if assistant_id:
+                        try:
+                            await context.bot.unban_chat_member(chat_id=chat_id, user_id=assistant_id)
+                        except Exception:
+                            pass
+                    invite = await context.bot.create_chat_invite_link(
+                        chat_id=chat_id,
+                        name="VC Assistant Peer Repair",
+                        member_limit=1,
+                        creates_join_request=False,
+                    )
+                    await vc.join_chat_via_invite(invite.invite_link)
+                    await asyncio.sleep(1.5)
+                    mode, track = await vc.enqueue_or_play(chat_id, query, requested_by)
+                    VC_ASSISTANT_PRESENT_CACHE[chat_id] = time.time()
+                except Exception as retry_exc:
+                    raise RuntimeError(
+                        "Assistant cannot access this group peer yet. "
+                        "Please add assistant once manually and try /vplay again. "
+                        f"Details: {retry_exc}"
+                    ) from retry_exc
+            else:
+                raise
 
         if mode == "playing":
             await status_msg.edit_text(_vc_now_playing_card(track, requested_by), parse_mode=ParseMode.MARKDOWN)
