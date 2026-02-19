@@ -1,6 +1,8 @@
 import asyncio
 import importlib
+import os
 import re
+import tempfile
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Optional
@@ -30,6 +32,7 @@ class VCManager:
         self._supports_play_api = False
         self._supports_join_api = False
         self._yt_dlp: Any = None
+        self._cookie_file_path: Optional[str] = None
 
         self.queues: dict[int, list[VCTrack]] = {}
         self.now_playing: dict[int, VCTrack] = {}
@@ -129,6 +132,12 @@ class VCManager:
                 await self._assistant.stop()
             except Exception:
                 pass
+            if self._cookie_file_path and os.path.exists(self._cookie_file_path):
+                try:
+                    os.remove(self._cookie_file_path)
+                except Exception:
+                    pass
+                self._cookie_file_path = None
             self._ready = False
 
     async def get_assistant_identity(self) -> tuple[Optional[int], Optional[str]]:
@@ -156,6 +165,29 @@ class VCManager:
 
     def _is_url(self, text: str) -> bool:
         return bool(re.match(r"^https?://", text.strip(), re.IGNORECASE))
+
+    def _resolve_cookie_file(self) -> Optional[str]:
+        """Resolve yt-dlp cookies from env for Railway/server usage."""
+        cookie_file = (os.getenv("YTDLP_COOKIE_FILE", "") or "").strip()
+        if cookie_file and os.path.exists(cookie_file):
+            return cookie_file
+
+        cookie_text = (os.getenv("YTDLP_COOKIES", "") or "").strip()
+        if not cookie_text:
+            return None
+
+        if self._cookie_file_path and os.path.exists(self._cookie_file_path):
+            return self._cookie_file_path
+
+        normalized = cookie_text.replace("\\n", "\n").strip()
+        if not normalized:
+            return None
+
+        fd, path = tempfile.mkstemp(prefix="animx_yt_cookies_", suffix=".txt")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(normalized)
+        self._cookie_file_path = path
+        return path
 
     def _pick_stream_url(self, info: dict[str, Any]) -> Optional[str]:
         """Pick a playable stream URL from yt-dlp info with fallbacks."""
@@ -211,10 +243,22 @@ class VCManager:
                 }
             },
         }
+        cookie_file = self._resolve_cookie_file()
+        if cookie_file:
+            ydl_opts["cookiefile"] = cookie_file
 
         search_target = query if self._is_url(query) else f"ytsearch1:{query}"
         with self._yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(search_target, download=False)
+            try:
+                info = ydl.extract_info(search_target, download=False)
+            except Exception as e:
+                err = str(e)
+                if "Sign in to confirm you’re not a bot" in err or "Sign in to confirm you're not a bot" in err:
+                    raise RuntimeError(
+                        "YouTube blocked anonymous extraction for this track. "
+                        "Set YTDLP_COOKIES (Netscape cookies text) or YTDLP_COOKIE_FILE in Railway vars, then redeploy."
+                    ) from e
+                raise
             if not info:
                 raise RuntimeError("No track found")
             if "entries" in info:
@@ -228,7 +272,16 @@ class VCManager:
             if not webpage_url:
                 raise RuntimeError("Could not resolve webpage url")
 
-            detailed = ydl.extract_info(webpage_url, download=False)
+            try:
+                detailed = ydl.extract_info(webpage_url, download=False)
+            except Exception as e:
+                err = str(e)
+                if "Sign in to confirm you’re not a bot" in err or "Sign in to confirm you're not a bot" in err:
+                    raise RuntimeError(
+                        "YouTube blocked anonymous extraction for this track. "
+                        "Set YTDLP_COOKIES (Netscape cookies text) or YTDLP_COOKIE_FILE in Railway vars, then redeploy."
+                    ) from e
+                raise
             if not detailed:
                 raise RuntimeError("Could not resolve stream info")
             stream_url = self._pick_stream_url(detailed)
