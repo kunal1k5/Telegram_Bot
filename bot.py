@@ -2182,6 +2182,22 @@ async def broadcast_content(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 # ========================= SONG DOWNLOAD COMMANDS ========================= #
 
+async def _auto_delete_music_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Delete user music request message in groups (best effort)."""
+    try:
+        if not update.effective_chat or not update.effective_message:
+            return
+        if update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+            return
+        await context.bot.delete_message(
+            chat_id=update.effective_chat.id,
+            message_id=update.effective_message.message_id,
+        )
+    except Exception:
+        # Ignore delete failures (missing rights/too old/already deleted).
+        pass
+
+
 async def song_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /song command - Fast song download with fallback retry."""
     user_id = update.effective_user.id
@@ -2201,6 +2217,7 @@ async def song_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     song_name = " ".join(context.args)
     search_msg = await update.effective_message.reply_text("Fast mode on: song search kar rahi hoon...")
+    await _auto_delete_music_request(update, context)
 
     user_dir = DOWNLOAD_DIR / str(user_id)
     user_dir.mkdir(parents=True, exist_ok=True)
@@ -2269,7 +2286,6 @@ async def song_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     title=metadata.get("title", audio_file.stem[:100]) if metadata else audio_file.stem[:100],
                     performer=metadata.get("performer", "Unknown Artist") if metadata else "Unknown Artist",
                     duration=metadata.get("duration") if metadata else None,
-                    reply_to_message_id=update.effective_message.message_id,
                 )
 
             BOT_DB.log_activity(
@@ -2349,6 +2365,7 @@ async def yt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     search_msg = await update.effective_message.reply_text("Link process kar rahi hoon...")
+    await _auto_delete_music_request(update, context)
 
     user_dir = DOWNLOAD_DIR / str(user_id)
     user_dir.mkdir(parents=True, exist_ok=True)
@@ -2392,7 +2409,6 @@ async def yt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                     title=metadata.get("title", audio_file.stem[:100]) if metadata else audio_file.stem[:100],
                     performer=metadata.get("performer", "Unknown Artist") if metadata else "Unknown Artist",
                     duration=metadata.get("duration") if metadata else None,
-                    reply_to_message_id=update.effective_message.message_id,
                 )
 
             BOT_DB.log_activity(
@@ -4467,6 +4483,7 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     query = " ".join(context.args).strip()
     status_msg = await update.effective_message.reply_text("Resolving track for voice chat...")
+    await _auto_delete_music_request(update, context)
 
     try:
         vc = await _get_vc_manager()
