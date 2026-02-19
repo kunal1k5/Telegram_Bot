@@ -16,6 +16,7 @@ class VCTrack:
     requested_by: str
     is_local: bool = False
     duration: Optional[int] = None
+    thumbnail: Optional[str] = None
 
 
 class VCManager:
@@ -41,6 +42,7 @@ class VCManager:
         self.active_calls: set[int] = set()
         self._auto_tasks: dict[int, asyncio.Task] = {}
         self._play_tokens: dict[int, int] = {}
+        self._paused_chats: set[int] = set()
 
     async def start(self) -> None:
         if self._ready:
@@ -417,6 +419,13 @@ class VCManager:
                             final_duration = int(final_duration) if final_duration else None
                         except Exception:
                             final_duration = None
+                    final_thumbnail = detailed.get("thumbnail")
+                    if not final_thumbnail:
+                        thumbs = detailed.get("thumbnails") or []
+                        if thumbs and isinstance(thumbs, list):
+                            last_thumb = thumbs[-1] if thumbs else {}
+                            if isinstance(last_thumb, dict):
+                                final_thumbnail = last_thumb.get("url")
                     return VCTrack(
                         title=final_title[:120],
                         webpage_url=final_url,
@@ -424,6 +433,7 @@ class VCManager:
                         requested_by=requested_by,
                         is_local=False,
                         duration=final_duration,
+                        thumbnail=final_thumbnail,
                     )
                 except Exception as e:
                     err = str(e)
@@ -482,6 +492,7 @@ class VCManager:
 
         self.active_calls.add(chat_id)
         self.now_playing[chat_id] = track
+        self._paused_chats.discard(chat_id)
         self._schedule_auto_advance(chat_id, track, token)
 
     async def enqueue_or_play(self, chat_id: int, query: str, requested_by: str) -> tuple[str, VCTrack]:
@@ -508,6 +519,7 @@ class VCManager:
             requested_by=requested_by,
             is_local=True,
             duration=duration,
+            thumbnail=None,
         )
         if chat_id in self.now_playing:
             self.queues.setdefault(chat_id, []).append(track)
@@ -518,6 +530,7 @@ class VCManager:
     async def skip(self, chat_id: int) -> Optional[VCTrack]:
         old_track = self.now_playing.get(chat_id)
         self._cancel_auto_task(chat_id)
+        self._paused_chats.discard(chat_id)
         queue = self.queues.get(chat_id, [])
         if not queue:
             self.now_playing.pop(chat_id, None)
@@ -534,6 +547,7 @@ class VCManager:
         queued_tracks = self.queues.get(chat_id, [])
         self._cancel_auto_task(chat_id)
         self._play_tokens.pop(chat_id, None)
+        self._paused_chats.discard(chat_id)
         if not self._ready:
             self._cleanup_track_file(old_track)
             for item in queued_tracks:
@@ -549,6 +563,36 @@ class VCManager:
         self._cleanup_track_file(old_track)
         for item in queued_tracks:
             self._cleanup_track_file(item)
+
+    async def pause_chat(self, chat_id: int) -> None:
+        if not self._ready:
+            raise RuntimeError("VC is not running")
+        self._cancel_auto_task(chat_id)
+        if hasattr(self._calls, "pause_stream"):
+            await self._calls.pause_stream(chat_id)
+        elif hasattr(self._calls, "pause"):
+            await self._calls.pause(chat_id)
+        else:
+            raise RuntimeError("Pause not supported by current VC backend")
+        self._paused_chats.add(chat_id)
+
+    async def resume_chat(self, chat_id: int) -> None:
+        if not self._ready:
+            raise RuntimeError("VC is not running")
+        if hasattr(self._calls, "resume_stream"):
+            await self._calls.resume_stream(chat_id)
+        elif hasattr(self._calls, "resume"):
+            await self._calls.resume(chat_id)
+        else:
+            raise RuntimeError("Resume not supported by current VC backend")
+        self._paused_chats.discard(chat_id)
+        now_track = self.now_playing.get(chat_id)
+        token = self._play_tokens.get(chat_id, 0)
+        if now_track and token:
+            self._schedule_auto_advance(chat_id, now_track, token)
+
+    def is_paused(self, chat_id: int) -> bool:
+        return chat_id in self._paused_chats
 
     def get_queue(self, chat_id: int) -> list[VCTrack]:
         return list(self.queues.get(chat_id, []))

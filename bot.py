@@ -4575,25 +4575,85 @@ def _format_vc_duration(seconds: Optional[int]) -> str:
 
 def _vc_now_playing_card(track: Any, requested_by: str, download_mode: bool = False) -> str:
     mode_badge = " (Download Mode)" if download_mode else ""
-    source_line = "Downloaded fallback audio" if download_mode else track.webpage_url
     return (
-        f"🎧 **RESSO STYLE PLAYER{mode_badge}**\n\n"
-        f"♫ **Now Playing**\n"
-        f"🎵 **Title:** {track.title}\n"
-        f"🕒 **Duration:** {_format_vc_duration(getattr(track, 'duration', None))}\n"
-        f"👤 **Requested by:** {requested_by}\n"
-        f"🔗 **Source:** {source_line}"
+        f"🎧 RESSO MUSIC PLAYER{mode_badge}\n\n"
+        f"♫ Now Playing\n"
+        f"🎵 Title: {track.title}\n"
+        f"🕒 Duration: {_format_vc_duration(getattr(track, 'duration', None))}\n"
+        f"👤 Requested by: {requested_by}"
     )
 
 
 def _vc_queue_card(track: Any, position: int, download_mode: bool = False) -> str:
     mode_badge = " (Download Mode)" if download_mode else ""
     return (
-        f"📜 **Added to Queue{mode_badge}**\n\n"
-        f"🎵 **Title:** {track.title}\n"
-        f"🕒 **Duration:** {_format_vc_duration(getattr(track, 'duration', None))}\n"
-        f"🔢 **Position:** {position}"
+        f"📜 Added to Queue{mode_badge}\n\n"
+        f"🎵 Title: {track.title}\n"
+        f"🕒 Duration: {_format_vc_duration(getattr(track, 'duration', None))}\n"
+        f"🔢 Position: {position}"
     )
+
+
+def _vc_player_keyboard(is_paused: bool = False) -> InlineKeyboardMarkup:
+    play_pause_label = "▶️ Resume" if is_paused else "⏸ Pause"
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("⏮ Queue", callback_data="vcctl_queue"),
+                InlineKeyboardButton(play_pause_label, callback_data="vcctl_pause_resume"),
+                InlineKeyboardButton("⏭ Skip", callback_data="vcctl_skip"),
+                InlineKeyboardButton("⏹ Stop", callback_data="vcctl_stop"),
+            ]
+        ]
+    )
+
+
+async def _send_vc_player_card(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    status_message: Message,
+    track: Any,
+    requested_by: str,
+    download_mode: bool = False,
+) -> None:
+    caption = _vc_now_playing_card(track, requested_by, download_mode=download_mode)
+    vc = await _get_vc_manager()
+    keyboard = _vc_player_keyboard(vc.is_paused(update.effective_chat.id))
+    thumb = getattr(track, "thumbnail", None)
+    try:
+        if thumb:
+            await status_message.delete()
+            await update.effective_message.reply_photo(
+                photo=thumb,
+                caption=caption,
+                reply_markup=keyboard,
+            )
+            return
+    except Exception:
+        pass
+
+    await status_message.edit_text(caption, reply_markup=keyboard)
+
+
+def _vc_queue_preview(queue: List[Any], limit: int = 5) -> str:
+    if not queue:
+        return "Queue is empty."
+    lines = []
+    for i, item in enumerate(queue[:limit], 1):
+        lines.append(f"{i}. {item.title} • {_format_vc_duration(getattr(item, 'duration', None))}")
+    return "\n".join(lines)
+
+
+async def _update_vc_player_callback_message(query: CallbackQuery, track: Any, paused: bool = False) -> None:
+    caption = _vc_now_playing_card(track, track.requested_by, download_mode=getattr(track, "is_local", False))
+    keyboard = _vc_player_keyboard(paused)
+    try:
+        if query.message and query.message.photo:
+            await query.edit_message_caption(caption=caption, reply_markup=keyboard)
+        else:
+            await query.edit_message_text(text=caption, reply_markup=keyboard)
+    except Exception:
+        pass
 
 
 def _pkg_version(name: str) -> str:
@@ -4828,10 +4888,10 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 raise
 
         if mode == "playing":
-            await status_msg.edit_text(_vc_now_playing_card(track, requested_by), parse_mode=ParseMode.MARKDOWN)
+            await _send_vc_player_card(update, context, status_msg, track, requested_by)
         else:
             queue_len = len(vc.get_queue(chat_id))
-            await status_msg.edit_text(_vc_queue_card(track, queue_len), parse_mode=ParseMode.MARKDOWN)
+            await status_msg.edit_text(_vc_queue_card(track, queue_len))
 
         await _send_log_to_channel(
             context,
@@ -4888,16 +4948,12 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                         metadata.get("duration"),
                     )
                     if mode == "playing":
-                        await status_msg.edit_text(
-                            _vc_now_playing_card(track, requested_by, download_mode=True),
-                            parse_mode=ParseMode.MARKDOWN,
+                        await _send_vc_player_card(
+                            update, context, status_msg, track, requested_by, download_mode=True
                         )
                     else:
                         queue_len = len(vc.get_queue(update.effective_chat.id))
-                        await status_msg.edit_text(
-                            _vc_queue_card(track, queue_len, download_mode=True),
-                            parse_mode=ParseMode.MARKDOWN,
-                        )
+                        await status_msg.edit_text(_vc_queue_card(track, queue_len, download_mode=True))
                     return
 
                 await status_msg.edit_text(
@@ -5469,7 +5525,60 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle inline button callbacks"""
     query = update.callback_query
-    await query.answer()
+
+    if query.data.startswith("vcctl_"):
+        chat_id = query.message.chat_id if query.message else None
+        if not chat_id:
+            await query.answer("Chat not found.", show_alert=True)
+            return
+        try:
+            vc = await _get_vc_manager()
+            action = query.data.split("_", 1)[1]
+            if action == "pause_resume":
+                if vc.is_paused(chat_id):
+                    await vc.resume_chat(chat_id)
+                    now_track = vc.get_now_playing(chat_id)
+                    if now_track:
+                        await _update_vc_player_callback_message(query, now_track, paused=False)
+                else:
+                    await vc.pause_chat(chat_id)
+                    now_track = vc.get_now_playing(chat_id)
+                    if now_track:
+                        await _update_vc_player_callback_message(query, now_track, paused=True)
+                return
+
+            if action == "skip":
+                next_track = await vc.skip(chat_id)
+                if not next_track:
+                    try:
+                        if query.message and query.message.photo:
+                            await query.edit_message_caption("⏹ Playback stopped. Queue is empty.")
+                        else:
+                            await query.edit_message_text("⏹ Playback stopped. Queue is empty.")
+                    except Exception:
+                        pass
+                    return
+                await _update_vc_player_callback_message(query, next_track, paused=False)
+                return
+
+            if action == "stop":
+                await vc.stop_chat(chat_id)
+                try:
+                    if query.message and query.message.photo:
+                        await query.edit_message_caption("⏹ Playback stopped and queue cleared.")
+                    else:
+                        await query.edit_message_text("⏹ Playback stopped and queue cleared.")
+                except Exception:
+                    pass
+                return
+
+            if action == "queue":
+                queue = vc.get_queue(chat_id)
+                await query.answer(_vc_queue_preview(queue), show_alert=True)
+                return
+        except Exception as e:
+            await query.answer(f"VC control failed: {e}", show_alert=True)
+            return
 
     if query.data.startswith("setting_"):
         await handle_setting_callback(update, context)
@@ -5567,6 +5676,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=reply_markup,
         )
+
+    try:
+        await query.answer()
+    except Exception:
+        pass
 
 
 # ========================= MESSAGE HANDLERS ========================= #
