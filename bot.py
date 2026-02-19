@@ -172,6 +172,7 @@ DEFAULT_GROUP_SETTINGS = {
     "allow_gifs": True,
     "allow_links": True,
     "allow_forwards": True,
+    "remove_bot_links": True,
     "welcome_message": True,
     "antiflood_enabled": True,
     "max_message_length": 4000,
@@ -475,6 +476,18 @@ def _is_spam_link(text: str) -> bool:
     text_lower = text.lower()
     for pattern in SPAM_LINK_PATTERNS:
         if re.search(pattern, text_lower):
+            return True
+    return False
+
+
+def _contains_bot_link(text: str) -> bool:
+    """Detect Telegram bot profile links like t.me/SomeBot."""
+    if not text:
+        return False
+    matches = re.findall(r"(?:https?://)?(?:t\.me|telegram\.me)/([A-Za-z0-9_]{5,})", text, re.IGNORECASE)
+    for handle in matches:
+        clean = handle.strip().lower().rstrip("/")
+        if clean.endswith("bot"):
             return True
     return False
 
@@ -4306,6 +4319,13 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
         _save_group_settings(GROUP_SETTINGS)
     
     settings = GROUP_SETTINGS[group_id]
+    updated_defaults = False
+    for key, value in DEFAULT_GROUP_SETTINGS.items():
+        if key not in settings:
+            settings[key] = value
+            updated_defaults = True
+    if updated_defaults:
+        _save_group_settings(GROUP_SETTINGS)
     
     # ============ VIEW ALL SETTINGS ============
     if action == "view":
@@ -4322,7 +4342,8 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
             f"├─ Stickers: {'✅ Allowed' if settings['allow_stickers'] else '❌ Not Allowed'}\n"
             f"├─ GIFs: {'✅ Allowed' if settings['allow_gifs'] else '❌ Not Allowed'}\n"
             f"├─ Links: {'✅ Allowed' if settings['allow_links'] else '❌ Not Allowed'}\n"
-            f"├─ Forwards: {'✅ Allowed' if settings['allow_forwards'] else '❌ Not Allowed'}\n\n"
+            f"├─ Forwards: {'✅ Allowed' if settings['allow_forwards'] else '❌ Not Allowed'}\n"
+            f"├─ Bot Links: {'🧹 Auto Delete' if settings['remove_bot_links'] else '✅ Allowed'}\n\n"
             "*👋 Notifications:*\n"
             f"└─ Welcome: {'✅ ON' if settings['welcome_message'] else '❌ OFF'}"
         )
@@ -4417,6 +4438,8 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
                                 callback_data=f"setting_links_{group_id}"),
              InlineKeyboardButton(f"↪️ Forwards: {'✅' if settings['allow_forwards'] else '❌'}", 
                                 callback_data=f"setting_forwards_{group_id}")],
+            [InlineKeyboardButton(f"🤖 Bot Links: {'🧹' if settings['remove_bot_links'] else '✅'}",
+                                callback_data=f"setting_botlinks_{group_id}")],
             [InlineKeyboardButton("🔙 Back to Menu", callback_data=f"setting_menu_{group_id}")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -4425,7 +4448,8 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
             f"Stickers: {'✅ Allowed' if settings['allow_stickers'] else '❌ Not Allowed'}\n"
             f"GIFs: {'✅ Allowed' if settings['allow_gifs'] else '❌ Not Allowed'}\n"
             f"Links: {'✅ Allowed' if settings['allow_links'] else '❌ Not Allowed'}\n"
-            f"Forwards: {'✅ Allowed' if settings['allow_forwards'] else '❌ Not Allowed'}\n\n"
+            f"Forwards: {'✅ Allowed' if settings['allow_forwards'] else '❌ Not Allowed'}\n"
+            f"Bot Links: {'🧹 Auto Delete' if settings['remove_bot_links'] else '✅ Allowed'}\n\n"
             "Click to toggle:",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=reply_markup
@@ -4530,13 +4554,14 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
         return
     
     # ============ CONTENT CONTROL TOGGLES ============
-    if action in ["stickers", "gifs", "links", "forwards", "welcome"]:
+    if action in ["stickers", "gifs", "links", "forwards", "welcome", "botlinks"]:
         setting_map = {
             "stickers": "allow_stickers",
             "gifs": "allow_gifs",
             "links": "allow_links",
             "forwards": "allow_forwards",
-            "welcome": "welcome_message"
+            "welcome": "welcome_message",
+            "botlinks": "remove_bot_links",
         }
         
         name_map = {
@@ -4544,7 +4569,8 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
             "gifs": "GIFs",
             "links": "Links",
             "forwards": "Forwards",
-            "welcome": "Welcome Message"
+            "welcome": "Welcome Message",
+            "botlinks": "Bot Link Auto-Delete",
         }
         
         setting_key = setting_map[action]
@@ -4555,7 +4581,7 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.answer(f"✅ {name_map[action]} {status}!")
         
         # Determine which category to refresh
-        if action in ["stickers", "gifs", "links", "forwards"]:
+        if action in ["stickers", "gifs", "links", "forwards", "botlinks"]:
             keyboard = [
                 [InlineKeyboardButton(f"🎭 Stickers: {'✅' if settings['allow_stickers'] else '❌'}", 
                                     callback_data=f"setting_stickers_{group_id}"),
@@ -4565,6 +4591,8 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
                                     callback_data=f"setting_links_{group_id}"),
                  InlineKeyboardButton(f"↪️ Forwards: {'✅' if settings['allow_forwards'] else '❌'}", 
                                     callback_data=f"setting_forwards_{group_id}")],
+                [InlineKeyboardButton(f"🤖 Bot Links: {'🧹' if settings['remove_bot_links'] else '✅'}",
+                                    callback_data=f"setting_botlinks_{group_id}")],
                 [InlineKeyboardButton("🔙 Back to Menu", callback_data=f"setting_menu_{group_id}")]
             ]
         else:
@@ -4912,6 +4940,20 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             logger.info(f"🚫 Spam detected and handled from {user_name}")
             return  # Spam detected and handled, don't process further
         
+        # Bot link auto-delete (configurable in /settings)
+        group_id = update.effective_chat.id
+        if get_group_setting(group_id, "remove_bot_links") and _contains_bot_link(message_text):
+            try:
+                await update.message.delete()
+                BOT_DB.log_activity(
+                    "bot_link_deleted",
+                    user_id=update.effective_user.id if update.effective_user else None,
+                    group_id=group_id,
+                    metadata={"text": message_text[:300]},
+                )
+            except Exception as e:
+                logger.warning(f"Could not delete bot link message: {e}")
+            return
         # Register user
         user_id = update.effective_user.id
         username = update.effective_user.username
@@ -5297,6 +5339,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
 
