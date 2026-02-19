@@ -1204,28 +1204,28 @@ Make them smile. Make them feel heard. Have fun with them. â¤ï¸
 
 # Start message
 START_TEXT: Final[str] = """
-ðŸ’• *Hey! I'm Baby* ðŸ’•
+*Hey! I'm Baby*
 
-Your friendly companion, always ready to chat. ðŸ˜Š
+Your friendly companion, always ready to chat.
 
 *What I can do:*
-ðŸ’¬ Have real conversations
-ðŸŽµ Find and send songs
-ðŸ˜„ Fun interactions
-ðŸ¤— Help and support
+- Have real conversations
+- Find and send songs
+- Play music in voice chat groups
+- Help and support
 
-Send me a message and let's talk! âœ¨
+Send me a message and let's talk.
 """
 
 HELP_TEXT: Final[str] = """
-ðŸ’• *Baby Help Guide* ðŸ’•
+*Baby Help Guide*
 
 *Basic Commands:*
 /start - Start the bot
 /help - Open this help menu
 
 *Music Commands:*
-/play <name> - Alias of /song
+/play <name> - In groups: VC play, in private: song file
 /song <name> - Search and send a song
 /download <name> - Same as /song
 /yt <link> - Download from a YouTube link
@@ -1254,13 +1254,18 @@ HELP_TEXT: Final[str] = """
 /vqueue - Show VC queue
 /vskip - Skip current VC song
 /vstop - Stop VC and clear queue
+/vcguide - Setup and usage guide for VC play
 
 *Notes:*
-- You can chat in any language.
-- In groups, mention the bot or reply to the bot for AI chat.
 - VC streaming requires `API_ID`, `API_HASH`, and `ASSISTANT_SESSION` to be configured.
-- AI tools via chat text:
-  `translate <text>`, `summarize <text>`, `calc <expression>`, `time`
+- In private chat, music commands send audio files. In groups, use VC commands for live playback.
+- For best results, make bot + assistant admins in VC groups.
+
+*AI Quick Tools (chat trigger):*
+- `translate <text>`
+- `summarize <text>`
+- `calc <expression>`
+- `time`
 """
 
 # Windows async fix
@@ -1675,19 +1680,34 @@ async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_T
     except Exception as e:
         logger.error(f"Error in my_chat_member_handler: {e}")
 
+def _build_start_keyboard() -> InlineKeyboardMarkup:
+    keyboard = [
+        [
+            InlineKeyboardButton("Chat With Me", callback_data="chat"),
+            InlineKeyboardButton("Add To Group", url=f"https://t.me/{BOT_USERNAME[1:]}?startgroup=true"),
+        ],
+        [
+            InlineKeyboardButton("Help", callback_data="help"),
+            InlineKeyboardButton("VC Guide", callback_data="vc_guide"),
+        ],
+        [
+            InlineKeyboardButton("Channel", url=f"https://t.me/{CHANNEL_USERNAME[1:]}"),
+            InlineKeyboardButton("Group Settings", callback_data="show_settings_info"),
+        ],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start command with inline buttons"""
-    # Register user with full details
     await _register_user_from_update(update)
-    
+
     user_id = update.effective_user.id
-    
-    # Remove from opted-out list if they were opted out
     if user_id in OPTED_OUT_USERS:
         OPTED_OUT_USERS.discard(user_id)
         _save_opted_out_users(OPTED_OUT_USERS)
-        logger.info(f"ðŸ“¥ User {user_id} opted back in to broadcasts")
-    
+        logger.info("User %s opted back in to broadcasts", user_id)
+
     logger.info(
         "/start - chat_id=%s, user=%s",
         update.effective_chat.id if update.effective_chat else None,
@@ -1704,38 +1724,21 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             f"At: {time.strftime('%Y-%m-%d %H:%M:%S')}"
         ),
     )
-    
-    # Create inline keyboard
-    keyboard = [
-        [
-            InlineKeyboardButton("ðŸ’¬ Chat With Me", callback_data="chat"),
-            InlineKeyboardButton("âž• Add To Group", url=f"https://t.me/{BOT_USERNAME[1:]}?startgroup=true"),
-        ],
-        [
-            InlineKeyboardButton("ðŸ“– Help", callback_data="help"),
-            InlineKeyboardButton("ðŸ“¢ Channel", url=f"https://t.me/{CHANNEL_USERNAME[1:]}"),
-        ],
-        [
-            InlineKeyboardButton("âš™ï¸ Group Settings", callback_data="show_settings_info"),
-        ],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
+
     await update.effective_message.reply_text(
         START_TEXT,
         parse_mode=ParseMode.MARKDOWN,
-        reply_markup=reply_markup,
+        reply_markup=_build_start_keyboard(),
     )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /help command"""
-    # Register user
     await _register_user(update.effective_user.id)
-    
-    keyboard = [[InlineKeyboardButton("ðŸ  Back to Start", callback_data="start")]]
+
+    keyboard = [[InlineKeyboardButton("Back to Start", callback_data="start")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
+
     await update.effective_message.reply_text(
         HELP_TEXT,
         parse_mode=ParseMode.MARKDOWN,
@@ -2280,14 +2283,19 @@ async def download_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def play_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Alias for /song. (This bot sends audio file, not live VC stream.)"""
+    """In groups -> VC play, in private -> send song audio file."""
     if not context.args:
         await update.effective_message.reply_text(
             "Use: /play <song name>\n"
-            "This command sends song audio in chat.\n"
-            "Live VC streaming is not enabled in this bot build."
+            "In groups: plays in voice chat.\n"
+            "In private: sends audio file."
         )
         return
+
+    if update.effective_chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        await vplay_command(update, context)
+        return
+
     await song_command(update, context)
 
 
@@ -4397,6 +4405,26 @@ async def channelstats_command(update: Update, context: ContextTypes.DEFAULT_TYP
     await update.effective_message.reply_text(report)
 
 
+async def vcguide_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show VC setup + usage guide."""
+    guide_text = (
+        "Voice Chat Play Guide\n\n"
+        "Setup (one time):\n"
+        "1. Add bot and assistant account to group.\n"
+        "2. Make both admin.\n"
+        "3. Start group voice chat.\n"
+        "4. Give assistant permission to manage voice chats.\n\n"
+        "Use commands in group:\n"
+        "- /vplay <song name or url>\n"
+        "- /vqueue\n"
+        "- /vskip\n"
+        "- /vstop\n\n"
+        "Shortcut:\n"
+        "- /play <song> in group will auto-use VC play.\n"
+    )
+    await update.effective_message.reply_text(guide_text)
+
+
 async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Play music in Telegram voice chat using assistant + PyTgCalls."""
     await _register_user_from_update(update)
@@ -4438,7 +4466,15 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             ),
         )
     except Exception as e:
-        await status_msg.edit_text(f"VC play failed: {e}")
+        err = str(e)
+        troubleshooting = (
+            "\n\nQuick checks:\n"
+            "1. Assistant account is in this group.\n"
+            "2. Bot + assistant are admins with voice chat rights.\n"
+            "3. A voice chat is started in the group.\n"
+            "4. API_ID, API_HASH, ASSISTANT_SESSION are valid."
+        )
+        await status_msg.edit_text(f"VC play failed: {err}{troubleshooting}")
 
 
 async def vstop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -4979,119 +5015,100 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     """Handle inline button callbacks"""
     query = update.callback_query
     await query.answer()
-    
-    # Handle settings callbacks
+
     if query.data.startswith("setting_"):
         await handle_setting_callback(update, context)
         return
-    
+
     if query.data == "chat":
         await query.edit_message_text(
-            "ðŸŽ‰ *Chal, shuru karte hain!* ðŸŽ‰\n\n"
-            "Kuch bhi pucho, apna din batao, ya bas masti karo! ðŸ˜„\n\n"
-            "Main yaha hoon tere liye. Bol! ðŸ‘‚",
+            "Let us start.\n\n"
+            "Ask me anything, share your day, or just chat.\n\n"
+            "I am here for you.",
             parse_mode=ParseMode.MARKDOWN,
         )
-    
+
     elif query.data == "help":
-        keyboard = [[InlineKeyboardButton("ðŸ  Back to Start", callback_data="start")]]
+        keyboard = [[InlineKeyboardButton("Back to Start", callback_data="start")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
         await query.edit_message_text(
             HELP_TEXT,
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=reply_markup,
         )
-    
-    elif query.data == "start":
-        keyboard = [
-            [
-                InlineKeyboardButton("ðŸ’¬ Chat With Me", callback_data="chat"),
-                InlineKeyboardButton("âž• Add To Group", url=f"https://t.me/{BOT_USERNAME[1:]}?startgroup=true"),
-            ],
-            [
-                InlineKeyboardButton("ðŸ“– Help", callback_data="help"),
-                InlineKeyboardButton("ðŸ“¢ Channel", url=f"https://t.me/{CHANNEL_USERNAME[1:]}"),
-            ],
-            [
-                InlineKeyboardButton("âš™ï¸ Group Settings", callback_data="show_settings_info"),
-            ],
-        ]
+
+    elif query.data == "vc_guide":
+        keyboard = [[InlineKeyboardButton("Back to Start", callback_data="start")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
+        await query.edit_message_text(
+            "Voice Chat Play Guide\n\n"
+            "1. Add bot + assistant account in group.\n"
+            "2. Give both admin rights (voice chat permissions).\n"
+            "3. Start group voice chat.\n"
+            "4. Use /vplay <song name>.\n\n"
+            "Controls: /vqueue, /vskip, /vstop\n"
+            "Tip: /play <song> in group also starts VC play.",
+            reply_markup=reply_markup,
+        )
+
+    elif query.data == "start":
         await query.edit_message_text(
             START_TEXT,
             parse_mode=ParseMode.MARKDOWN,
-            reply_markup=reply_markup,
+            reply_markup=_build_start_keyboard(),
         )
-    
+
     elif query.data == "show_settings_info":
-        # Load user's groups from database
         user_groups = []
         for group_id, group_data in GROUPS_DATABASE.items():
-            if group_id < 0:  # Negative IDs are groups
+            if group_id < 0:
                 user_groups.append((group_id, group_data.get('title', 'Unknown Group')))
-        
+
         if not user_groups:
-            keyboard = [[InlineKeyboardButton("ðŸ  Back to Start", callback_data="start")]]
+            keyboard = [[InlineKeyboardButton("Back to Start", callback_data="start")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            
             await query.edit_message_text(
-                "âš™ï¸ *Group Settings*\n\n"
-                "Abhi tak kisi group mein nahi ho! ðŸ˜Š\n\n"
-                "Mujhe apne group mein add karo:\n"
-                "1. Group mein jao\n"
-                "2. âž• Add Members pe click karo\n"
-                "3. @AnimxClanBot search karo aur add karo\n"
-                "4. Mujhe admin banao\n"
-                "5. Group mein /settings use karo!\n\n"
-                "ðŸ’¡ *Note:* Settings sirf group admins access kar sakte hain.",
+                "*Group Settings*\n\n"
+                "I am not in any group yet.\n\n"
+                "How to add me:\n"
+                "1. Open your group\n"
+                "2. Tap Add Members\n"
+                "3. Search @AnimxClanBot and add\n"
+                "4. Make me admin\n"
+                "5. Use /settings in group\n\n"
+                "Only group admins can change settings.",
                 parse_mode=ParseMode.MARKDOWN,
                 reply_markup=reply_markup,
             )
         else:
-            # Show list of groups
             keyboard = []
-            for group_id, group_title in user_groups[:10]:  # Show max 10 groups
-                keyboard.append([InlineKeyboardButton(
-                    f"âš™ï¸ {group_title}", 
-                    callback_data=f"groupsetting_{group_id}"
-                )])
-            keyboard.append([InlineKeyboardButton("ðŸ  Back to Start", callback_data="start")])
+            for group_id, group_title in user_groups[:10]:
+                keyboard.append([InlineKeyboardButton(f"Settings: {group_title}", callback_data=f"groupsetting_{group_id}")])
+            keyboard.append([InlineKeyboardButton("Back to Start", callback_data="start")])
             reply_markup = InlineKeyboardMarkup(keyboard)
-            
             await query.edit_message_text(
-                "âš™ï¸ *Group Settings*\n\n"
-                "Apne group ko select karo settings change karne ke liye:\n\n"
-                "ðŸ’¡ *Note:* Settings change karne ke liye:\n"
-                "â€¢ Group mein jao\n"
-                "â€¢ /settings command use karo\n"
-                "â€¢ Sirf admins access kar sakte hain!",
+                "*Group Settings*\n\n"
+                "Select your group to manage settings.\n\n"
+                "Open that group and run /settings (admin only).",
                 parse_mode=ParseMode.MARKDOWN,
                 reply_markup=reply_markup,
             )
-    
+
     elif query.data.startswith("groupsetting_"):
         group_id = int(query.data.split("_")[1])
         group_name = GROUPS_DATABASE.get(group_id, {}).get('title', 'Group')
-        
-        keyboard = [[InlineKeyboardButton("ðŸ”™ Back to Groups", callback_data="show_settings_info")]]
+
+        keyboard = [[InlineKeyboardButton("Back to Groups", callback_data="show_settings_info")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
+
         await query.edit_message_text(
-            f"âš™ï¸ *Settings for {group_name}*\n\n"
-            f"Group settings sirf group chat mein access kar sakte ho! ðŸ˜Š\n\n"
-            f"Kaise use karein:\n"
-            f"1. `{group_name}` group mein jao\n"
-            f"2. /settings command type karo\n"
-            f"3. Settings customize karo\n\n"
-            f"ðŸ’¡ Tumhe us group ka admin hona chahiye!",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=reply_markup,
-        )
-        
-        await query.edit_message_text(
-            START_TEXT,
+            f"*Settings for {group_name}*\n\n"
+            "Group settings can only be changed inside that group.\n\n"
+            "Steps:\n"
+            "1. Open the group\n"
+            "2. Run /settings\n"
+            "3. Change options\n\n"
+            "You must be group admin.",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=reply_markup,
         )
@@ -5542,6 +5559,7 @@ def main() -> None:
     application.add_handler(CommandHandler("vqueue", vqueue_command))
     application.add_handler(CommandHandler("vskip", vskip_command))
     application.add_handler(CommandHandler("vstop", vstop_command))
+    application.add_handler(CommandHandler("vcguide", vcguide_command))
     
     # Broadcast command (admin only)
     application.add_handler(CommandHandler("broadcast", broadcast_command))
