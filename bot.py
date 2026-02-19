@@ -4495,12 +4495,32 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             except Exception as auto_join_error:
                 err_txt = str(auto_join_error).lower()
                 if "not enough rights" in err_txt or "administrator" in err_txt or "invite" in err_txt:
+                    await _send_log_to_channel(
+                        context,
+                        (
+                            "VC_AUTOJOIN_ERROR\n"
+                            f"Chat ID: {chat_id}\n"
+                            f"By: {update.effective_user.id}\n"
+                            f"Query: {query}\n"
+                            f"Error: {auto_join_error}"
+                        ),
+                    )
                     await status_msg.edit_text(
                         "\U0001F6A7 VC setup needs one admin permission.\n\n"
                         "Please enable Invite Users via Link for the bot admin role, then run /vplay again.\n\n"
                         "Also ensure assistant is not banned in this group."
                     )
                     return
+                await _send_log_to_channel(
+                    context,
+                    (
+                        "VC_AUTOJOIN_ERROR\n"
+                        f"Chat ID: {chat_id}\n"
+                        f"By: {update.effective_user.id}\n"
+                        f"Query: {query}\n"
+                        f"Error: {auto_join_error}"
+                    ),
+                )
                 await status_msg.edit_text(
                     "\U0001F6A7 VC setup incomplete: I could not auto-add the assistant account.\n\n"
                     "Required:\n"
@@ -4555,6 +4575,16 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
     except Exception as e:
         err = str(e)
+        await _send_log_to_channel(
+            context,
+            (
+                "VC_PLAY_ERROR\n"
+                f"Chat ID: {update.effective_chat.id if update.effective_chat else 'None'}\n"
+                f"By: {update.effective_user.id if update.effective_user else 'None'}\n"
+                f"Query: {query}\n"
+                f"Error: {err}"
+            ),
+        )
         troubleshooting = (
             "\n\nQuick checks:\n"
             "1. Assistant account is in this group.\n"
