@@ -166,6 +166,16 @@ class VCManager:
     def _is_url(self, text: str) -> bool:
         return bool(re.match(r"^https?://", text.strip(), re.IGNORECASE))
 
+    def _is_youtube_url(self, text: str) -> bool:
+        s = text.lower()
+        return "youtube.com/" in s or "youtu.be/" in s
+
+    def _is_antibot_error(self, error_text: str) -> bool:
+        return (
+            "sign in to confirm" in error_text.lower()
+            and "not a bot" in error_text.lower()
+        )
+
     def _resolve_cookie_file(self) -> Optional[str]:
         """Resolve yt-dlp cookies from env for Railway/server usage."""
         cookie_file = (os.getenv("YTDLP_COOKIE_FILE", "") or "").strip()
@@ -228,6 +238,27 @@ class VCManager:
             return other_candidates[0][1]
         return None
 
+    def _extract_search_candidates(
+        self, query: str, base_opts: dict[str, Any], limit: int = 5
+    ) -> list[tuple[str, str]]:
+        """Return (title, url) candidates using flat search mode."""
+        search_opts = dict(base_opts)
+        search_opts["extract_flat"] = True
+        with self._yt_dlp.YoutubeDL(search_opts) as ydl:
+            info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
+        if not info:
+            return []
+        out: list[tuple[str, str]] = []
+        for ent in info.get("entries") or []:
+            if not isinstance(ent, dict):
+                continue
+            url = ent.get("webpage_url") or ent.get("url")
+            if not url:
+                continue
+            title = ent.get("title") or "Unknown Title"
+            out.append((title, url))
+        return out
+
     def _resolve_track_sync(self, query: str, requested_by: str) -> VCTrack:
         base_opts = {
             "quiet": True,
@@ -241,7 +272,6 @@ class VCManager:
         if cookie_file:
             base_opts["cookiefile"] = cookie_file
 
-        # Some videos fail for a specific format string, so try a small fallback chain.
         format_profiles = [
             {
                 "format": "bestaudio[ext=m4a]/bestaudio/best",
@@ -256,7 +286,7 @@ class VCManager:
                 "extractor_args": {"youtube": {"player_client": ["ios", "mweb", "tv"]}},
             },
             {"format": "best"},
-            {},  # Let yt-dlp auto-pick.
+            {},
         ]
 
         query_is_url = self._is_url(query)
@@ -264,11 +294,21 @@ class VCManager:
         last_error: Optional[Exception] = None
 
         if query_is_url:
-            # For direct URLs, avoid a pre-extract step that can fail on unavailable default formats.
             webpage_url = query
             title = "Unknown Title"
+            if self._is_youtube_url(query):
+                # Try to fetch metadata in flat mode; if it fails, we still continue with raw URL.
+                try:
+                    search_opts = dict(base_opts)
+                    search_opts["extract_flat"] = True
+                    with self._yt_dlp.YoutubeDL(search_opts) as ydl:
+                        info = ydl.extract_info(query, download=False)
+                    if isinstance(info, dict):
+                        title = info.get("title") or title
+                        webpage_url = info.get("webpage_url") or webpage_url
+                except Exception:
+                    pass
         else:
-            # Step 1: resolve URL/title via flat search only (no format selection).
             search_opts = dict(base_opts)
             search_opts["extract_flat"] = True
             try:
@@ -276,7 +316,7 @@ class VCManager:
                     info = ydl.extract_info(search_target, download=False)
             except Exception as e:
                 err = str(e)
-                if "Sign in to confirm you’re not a bot" in err or "Sign in to confirm you're not a bot" in err:
+                if self._is_antibot_error(err):
                     raise RuntimeError(
                         "YouTube blocked anonymous extraction for this track. "
                         "Set YTDLP_COOKIES (Netscape cookies text) or YTDLP_COOKIE_FILE in Railway vars, then redeploy."
@@ -296,34 +336,46 @@ class VCManager:
             if not webpage_url:
                 raise RuntimeError("Could not resolve webpage url")
 
-        # Step 2: resolve playable stream URL with format fallbacks.
-        for profile in format_profiles:
-            detail_opts = dict(base_opts)
-            detail_opts.update(profile)
+        candidates: list[tuple[str, str]] = [(title, webpage_url)]
+        if query_is_url and self._is_youtube_url(webpage_url):
             try:
-                with self._yt_dlp.YoutubeDL(detail_opts) as ydl:
-                    detailed = ydl.extract_info(webpage_url, download=False)
+                alt_query = title if title and title != "Unknown Title" else query
+                for alt_title, alt_url in self._extract_search_candidates(alt_query, base_opts, limit=5):
+                    if alt_url != webpage_url:
+                        candidates.append((alt_title, alt_url))
+            except Exception:
+                pass
+
+        for candidate_title, candidate_url in candidates:
+            for profile in format_profiles:
+                detail_opts = dict(base_opts)
+                detail_opts.update(profile)
+                try:
+                    with self._yt_dlp.YoutubeDL(detail_opts) as ydl:
+                        detailed = ydl.extract_info(candidate_url, download=False)
                     if not detailed:
                         raise RuntimeError("Could not resolve stream info")
                     stream_url = self._pick_stream_url(detailed)
                     if not stream_url:
                         raise RuntimeError("Could not resolve audio stream url (no playable format)")
 
+                    final_title = detailed.get("title") or candidate_title or "Unknown Title"
+                    final_url = detailed.get("webpage_url") or candidate_url
                     return VCTrack(
-                        title=title[:120],
-                        webpage_url=webpage_url,
+                        title=final_title[:120],
+                        webpage_url=final_url,
                         stream_url=stream_url,
                         requested_by=requested_by,
                     )
-            except Exception as e:
-                err = str(e)
-                if "Sign in to confirm you’re not a bot" in err or "Sign in to confirm you're not a bot" in err:
-                    raise RuntimeError(
-                        "YouTube blocked anonymous extraction for this track. "
-                        "Set YTDLP_COOKIES (Netscape cookies text) or YTDLP_COOKIE_FILE in Railway vars, then redeploy."
-                    ) from e
-                last_error = e
-                continue
+                except Exception as e:
+                    err = str(e)
+                    if self._is_antibot_error(err):
+                        raise RuntimeError(
+                            "YouTube blocked anonymous extraction for this track. "
+                            "Set YTDLP_COOKIES (Netscape cookies text) or YTDLP_COOKIE_FILE in Railway vars, then redeploy."
+                        ) from e
+                    last_error = e
+                    continue
 
         if last_error:
             raise RuntimeError(f"Could not resolve stream: {last_error}") from last_error
