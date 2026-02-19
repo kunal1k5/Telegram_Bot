@@ -14,6 +14,7 @@ class VCTrack:
     webpage_url: str
     stream_url: str
     requested_by: str
+    is_local: bool = False
 
 
 class VCManager:
@@ -162,6 +163,16 @@ class VCManager:
     async def join_chat_via_invite(self, invite_link: str) -> None:
         await self.start()
         await self._assistant.join_chat(invite_link)
+
+    def _cleanup_track_file(self, track: Optional[VCTrack]) -> None:
+        """Delete local cached files after track is done."""
+        if not track or not track.is_local:
+            return
+        try:
+            if track.stream_url and os.path.exists(track.stream_url):
+                os.remove(track.stream_url)
+        except Exception:
+            pass
 
     def _is_url(self, text: str) -> bool:
         return bool(re.match(r"^https?://", text.strip(), re.IGNORECASE))
@@ -366,6 +377,7 @@ class VCManager:
                         webpage_url=final_url,
                         stream_url=stream_url,
                         requested_by=requested_by,
+                        is_local=False,
                     )
                 except Exception as e:
                     err = str(e)
@@ -431,18 +443,42 @@ class VCManager:
         await self._play_track(chat_id, track)
         return "playing", track
 
+    async def enqueue_or_play_local(
+        self, chat_id: int, file_path: str, title: str, requested_by: str
+    ) -> tuple[str, VCTrack]:
+        track = VCTrack(
+            title=title[:120] if title else "Downloaded Track",
+            webpage_url="local_file",
+            stream_url=file_path,
+            requested_by=requested_by,
+            is_local=True,
+        )
+        if chat_id in self.now_playing:
+            self.queues.setdefault(chat_id, []).append(track)
+            return "queued", track
+        await self._play_track(chat_id, track)
+        return "playing", track
+
     async def skip(self, chat_id: int) -> Optional[VCTrack]:
+        old_track = self.now_playing.get(chat_id)
         queue = self.queues.get(chat_id, [])
         if not queue:
             self.now_playing.pop(chat_id, None)
+            self._cleanup_track_file(old_track)
             return None
 
         next_track = queue.pop(0)
         await self._play_track(chat_id, next_track)
+        self._cleanup_track_file(old_track)
         return next_track
 
     async def stop_chat(self, chat_id: int) -> None:
+        old_track = self.now_playing.get(chat_id)
+        queued_tracks = self.queues.get(chat_id, [])
         if not self._ready:
+            self._cleanup_track_file(old_track)
+            for item in queued_tracks:
+                self._cleanup_track_file(item)
             return
         try:
             await self._calls.leave_group_call(chat_id)
@@ -451,6 +487,9 @@ class VCManager:
         self.queues.pop(chat_id, None)
         self.now_playing.pop(chat_id, None)
         self.active_calls.discard(chat_id)
+        self._cleanup_track_file(old_track)
+        for item in queued_tracks:
+            self._cleanup_track_file(item)
 
     def get_queue(self, chat_id: int) -> list[VCTrack]:
         return list(self.queues.get(chat_id, []))

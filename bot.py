@@ -4775,7 +4775,43 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         if not any(marker in err.lower() for marker in non_fallback_markers):
             try:
                 await status_msg.edit_text(
-                    "VC stream unavailable. Trying fallback: sending audio file in chat..."
+                    "VC stream unavailable. Trying download-mode VC playback..."
+                )
+                vc = await _get_vc_manager()
+                requested_by = update.effective_user.first_name or "User"
+                vc_cache_dir = DOWNLOAD_DIR / "vc_cache" / str(update.effective_chat.id)
+                vc_cache_dir.mkdir(parents=True, exist_ok=True)
+
+                dl_result = await asyncio.to_thread(_download_audio_sync, query, vc_cache_dir)
+                audio_file = dl_result[0] if dl_result else None
+                metadata = dl_result[1] if dl_result else {}
+                ok, _ = _validate_audio_file(audio_file)
+
+                if ok and audio_file and audio_file.exists():
+                    mode, track = await vc.enqueue_or_play_local(
+                        update.effective_chat.id,
+                        str(audio_file),
+                        metadata.get("title", audio_file.stem),
+                        requested_by,
+                    )
+                    if mode == "playing":
+                        await status_msg.edit_text(
+                            f"\U0001F3B6 Started Streaming (Download Mode)\n\n"
+                            f"\U0001F3B5 Title: {track.title}\n"
+                            f"\U0001F464 Requested by: {requested_by}\n"
+                            f"\U0001F4E6 Source: downloaded audio fallback"
+                        )
+                    else:
+                        queue_len = len(vc.get_queue(update.effective_chat.id))
+                        await status_msg.edit_text(
+                            f"\U0001F4DC Added to Queue (Download Mode)\n\n"
+                            f"\U0001F3B5 Title: {track.title}\n"
+                            f"\U0001F522 Position: {queue_len}"
+                        )
+                    return
+
+                await status_msg.edit_text(
+                    "VC download-mode also failed. Sending audio file in chat as final fallback..."
                 )
                 await song_command(update, context)
                 return
