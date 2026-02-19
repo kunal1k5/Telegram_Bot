@@ -6,6 +6,7 @@ import random
 import time
 import subprocess
 import shutil
+import re
 from pathlib import Path
 from typing import Final, Dict, List, Tuple, Optional, Set, Any
 
@@ -33,6 +34,8 @@ try:
 except ImportError:
     yt_dlp = None
 
+from database import BotDatabase
+
 # ========================= CONFIGURATION ========================= #
 
 # Get credentials from environment
@@ -54,6 +57,7 @@ if not OPENROUTER_API_KEY:
 # GEMINI_CLIENT: Optional[genai.Client] = None
 # if GEMINI_API_KEY:
 #     GEMINI_CLIENT = genai.Client(api_key=GEMINI_API_KEY)
+GEMINI_CLIENT: Optional[genai.Client] = None
 
 # Model fallback order (most stable first)
 GEMINI_MODELS: Final[list[str]] = [
@@ -67,7 +71,10 @@ GEMINI_MODEL_CACHE: list[str] = []
 BOT_NAME: Final[str] = "ANIMX CLAN"
 BOT_USERNAME: Final[str] = "@AnimxClanBot"
 OWNER_USERNAME: Final[str] = "@kunal1k5"
-CHANNEL_USERNAME: Final[str] = "@AnimxClanChannel"
+CHANNEL_USERNAME: Final[str] = "@AnimxClan_Channel"
+LOG_CHANNEL_USERNAME: Final[str] = os.getenv("LOG_CHANNEL_USERNAME", CHANNEL_USERNAME)
+LOG_CHANNEL_ID: Final[int] = int(os.getenv("LOG_CHANNEL_ID", "0"))
+ENABLE_USAGE_LOGS: Final[bool] = os.getenv("ENABLE_USAGE_LOGS", "true").lower() == "true"
 
 # Admin ID (Bot owner for broadcasts)
 ADMIN_ID: Final[int] = int(os.getenv("ADMIN_ID", "7971841264"))
@@ -245,6 +252,22 @@ GROUPS_DATABASE: Dict[int, Dict[str, Any]] = _load_groups_database()
 # Legacy set for backward compatibility
 REGISTERED_GROUPS: Set[int] = set(GROUPS_DATABASE.keys())
 
+
+def _remove_user_everywhere(user_id: int) -> None:
+    """Remove user from in-memory/json/sqlite stores."""
+    REGISTERED_USERS.discard(user_id)
+    USERS_DATABASE.pop(user_id, None)
+    _save_users_database(USERS_DATABASE)
+    BOT_DB.remove_user(user_id)
+
+
+def _remove_group_everywhere(group_id: int) -> None:
+    """Remove group from in-memory/json/sqlite stores."""
+    REGISTERED_GROUPS.discard(group_id)
+    GROUPS_DATABASE.pop(group_id, None)
+    _save_groups_database(GROUPS_DATABASE)
+    BOT_DB.remove_group(group_id)
+
 async def _register_group(chat_id: int, chat: Optional[Chat] = None) -> None:
     """Register a group with detailed information"""
     current_time = time.time()
@@ -265,13 +288,21 @@ async def _register_group(chat_id: int, chat: Optional[Chat] = None) -> None:
     else:
         # Update existing group
         GROUPS_DATABASE[chat_id]["last_active"] = current_time
+        REGISTERED_GROUPS.add(chat_id)
         if chat and chat.title:
             GROUPS_DATABASE[chat_id]["title"] = chat.title
         # Ensure members dict exists (for old groups)
         if "members" not in GROUPS_DATABASE[chat_id]:
             GROUPS_DATABASE[chat_id]["members"] = {}
-    
+
     _save_groups_database(GROUPS_DATABASE)
+    BOT_DB.upsert_group(
+        chat_id,
+        chat.title if chat else GROUPS_DATABASE[chat_id].get("title"),
+        chat.type if chat else GROUPS_DATABASE[chat_id].get("type"),
+        chat.username if chat else GROUPS_DATABASE[chat_id].get("username"),
+    )
+    BOT_DB.log_activity("group_seen", group_id=chat_id)
 
 async def _register_group_member(chat_id: int, user_id: int, username: Optional[str] = None, 
                                   first_name: Optional[str] = None) -> None:
@@ -315,6 +346,8 @@ async def _register_group_member(chat_id: int, user_id: int, username: Optional[
             members[user_id_str]["first_name"] = first_name
     
     _save_groups_database(GROUPS_DATABASE)
+    BOT_DB.upsert_group_member(chat_id, user_id, username, first_name)
+    BOT_DB.log_activity("group_member_seen", user_id=user_id, group_id=chat_id)
 
 async def _register_user(user_id: int, username: Optional[str] = None, first_name: Optional[str] = None) -> None:
     """Register a user with detailed information"""
@@ -336,13 +369,16 @@ async def _register_user(user_id: int, username: Optional[str] = None, first_nam
     else:
         # Update existing user
         USERS_DATABASE[user_id]["last_seen"] = current_time
+        REGISTERED_USERS.add(user_id)
         USERS_DATABASE[user_id]["message_count"] = USERS_DATABASE[user_id].get("message_count", 0) + 1
         if username:
             USERS_DATABASE[user_id]["username"] = username
         if first_name:
             USERS_DATABASE[user_id]["first_name"] = first_name
-    
+
     _save_users_database(USERS_DATABASE)
+    BOT_DB.upsert_user(user_id, username, first_name)
+    BOT_DB.log_activity("user_seen", user_id=user_id)
 
 async def _register_user_from_update(update: Update) -> None:
     """Helper to register user from Update object"""
@@ -560,6 +596,40 @@ DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 # File size limits (50MB for Telegram)
 MAX_FILE_SIZE: Final[int] = 50 * 1024 * 1024  # 50MB in bytes
+SEARCH_CACHE_TTL: Final[int] = 3600  # 1 hour
+SEARCH_CACHE: Dict[str, Dict[str, Any]] = {}
+
+
+def _is_url(text: str) -> bool:
+    return bool(re.match(r"^https?://", text.strip(), re.IGNORECASE))
+
+
+def _normalize_query(query: str) -> str:
+    return " ".join(query.lower().split())
+
+
+def _cache_get_url(query: str) -> Optional[str]:
+    key = _normalize_query(query)
+    entry = SEARCH_CACHE.get(key)
+    if not entry:
+        return None
+    if time.time() - entry.get("ts", 0) > SEARCH_CACHE_TTL:
+        SEARCH_CACHE.pop(key, None)
+        return None
+    return entry.get("url")
+
+
+def _cache_set_url(query: str, url: str) -> None:
+    SEARCH_CACHE[_normalize_query(query)] = {"url": url, "ts": time.time()}
+
+
+def _extract_video_url(info: Dict[str, Any]) -> Optional[str]:
+    if info.get("webpage_url"):
+        return info["webpage_url"]
+    video_id = info.get("id")
+    if video_id:
+        return f"https://www.youtube.com/watch?v={video_id}"
+    return None
 
 def _search_and_get_urls(query: str) -> List[str]:
     """Search YouTube and return list of video URLs (sync function for yt-dlp)"""
@@ -568,7 +638,7 @@ def _search_and_get_urls(query: str) -> List[str]:
         return []
     
     try:
-        logger.info(f"🔍 Searching for: {query}")
+        logger.info(f"Searching for: {query}")
         
         ydl_opts = {
             "quiet": True,
@@ -582,9 +652,9 @@ def _search_and_get_urls(query: str) -> List[str]:
             "default_search": "ytsearch",
             "no_color": True,
         }
-        
-        # Search for 10 results to increase success rate
-        search_query = f"ytsearch10:{query}"
+
+        # Search top 5 for fallback retries
+        search_query = f"ytsearch5:{query}"
         
         logger.debug(f"Search query: {search_query}")
         
@@ -604,18 +674,22 @@ def _search_and_get_urls(query: str) -> List[str]:
                         logger.warning(f"Error processing entry {idx}: {e}")
                         continue
                 
-                logger.info(f"✅ Found {len(urls)} search results for: {query}")
-                return urls[:10]
+                logger.info(f"Found {len(urls)} search results for: {query}")
+                if urls:
+                    _cache_set_url(query, urls[0])
+                return urls[:5]
             else:
                 logger.warning(f"No entries in search result: {result}")
     
     except Exception as e:
         logger.error(f"YouTube search error: {type(e).__name__}: {e}")
+        import traceback
+        logger.debug(traceback.format_exc())
     
-    logger.warning(f"❌ No search results found for: {query}")
+    logger.warning(f"No search results found for: {query}")
     return []
 
-def _download_audio_sync(url: str, output_dir: Path) -> Optional[Tuple[Path, Dict[str, Any]]]:
+def _download_audio_sync(url_or_query: str, output_dir: Path) -> Optional[Tuple[Path, Dict[str, Any]]]:
     """Download audio using yt-dlp (sync function for use with asyncio.to_thread)
     
     Returns:
@@ -627,8 +701,9 @@ def _download_audio_sync(url: str, output_dir: Path) -> Optional[Tuple[Path, Dic
         return None
     
     try:
-        logger.info(f"⬇️ Downloading from: {url}")
+        logger.info(f"Downloading from: {url_or_query}")
         
+        # Try with FFmpeg postprocessor first (for mp3 conversion)
         ydl_opts = {
             "format": "bestaudio/best",
             "outtmpl": str(output_dir / "%(title).80s.%(ext)s"),
@@ -637,23 +712,48 @@ def _download_audio_sync(url: str, output_dir: Path) -> Optional[Tuple[Path, Dic
             "noplaylist": True,
             "nocheckcertificate": True,
             "socket_timeout": 30,
-            "retries": 3,
-            "fragment_retries": 3,
+            "retries": 2,
+            "fragment_retries": 2,
             "ignoreerrors": False,
-            "postprocessors": [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "192",
-            }],
         }
+        target = url_or_query
+        is_url = _is_url(url_or_query)
+        cached_url = None
+        if not is_url:
+            cached_url = _cache_get_url(url_or_query)
+            target = cached_url or f"ytsearch1:{url_or_query}"
+            if not cached_url:
+                ydl_opts["default_search"] = "ytsearch1"
+        
+        # Add FFmpeg postprocessor if available, otherwise just download best audio
+        try:
+            import shutil
+            if shutil.which("ffmpeg"):
+                ydl_opts["postprocessors"] = [{
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": "192",
+                }]
+                logger.info("FFmpeg found, will convert to MP3")
+            else:
+                logger.info("FFmpeg not found, downloading best audio format as-is")
+        except:
+            logger.info("Will download best audio format without conversion")
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            logger.debug(f"Starting yt-dlp download for: {url}")
-            info = ydl.extract_info(url, download=True)
+            logger.debug(f"Starting yt-dlp download for: {target}")
+            info = ydl.extract_info(target, download=True)
             
             if not info:
-                logger.warning(f"No info returned from yt-dlp for: {url}")
+                logger.warning(f"No info returned from yt-dlp for: {url_or_query}")
                 return None
+
+            if "entries" in info:
+                entries = info.get("entries") or []
+                info = entries[0] if entries else None
+                if not info:
+                    logger.warning("No valid entries returned for query download")
+                    return None
             
             # Extract metadata
             title = info.get("title", "Unknown Title")[:100]
@@ -665,8 +765,13 @@ def _download_audio_sync(url: str, output_dir: Path) -> Optional[Tuple[Path, Dic
                 "performer": performer,
                 "duration": int(duration) if duration else None,
             }
+
+            # Update query cache from resolved URL
+            resolved_url = _extract_video_url(info)
+            if resolved_url and not is_url:
+                _cache_set_url(url_or_query, resolved_url)
             
-            # Get the downloaded file path (with .mp3 extension after postprocessing)
+            # Get the downloaded file path
             filename = ydl.prepare_filename(info)
             file_path = Path(filename)
             
@@ -674,20 +779,28 @@ def _download_audio_sync(url: str, output_dir: Path) -> Optional[Tuple[Path, Dic
             mp3_path = file_path.with_suffix(".mp3")
             if mp3_path.exists():
                 file_path = mp3_path
+                # Remove original file if it exists
+                if file_path != Path(filename) and Path(filename).exists():
+                    try:
+                        Path(filename).unlink()
+                    except:
+                        pass
             
             logger.info(f"File path: {file_path}")
             logger.info(f"File exists: {file_path.exists()}")
             
             if file_path.exists():
                 file_size = file_path.stat().st_size
-                logger.info(f"✅ Downloaded: {file_path.name} ({file_size / 1024:.1f}KB)")
-                logger.info(f"📝 Metadata: {metadata}")
+                logger.info(f"Downloaded: {file_path.name} ({file_size / 1024:.1f}KB)")
+                logger.info(f"Metadata: {metadata}")
                 return (file_path, metadata)
             else:
                 logger.warning(f"Downloaded file not found at: {file_path}")
     
     except Exception as e:
-        logger.error(f"Download failed for {url}: {type(e).__name__}: {e}")
+        logger.error(f"Download failed for {url_or_query}: {type(e).__name__}: {e}")
+        import traceback
+        logger.debug(traceback.format_exc())
     
     return None
 
@@ -701,76 +814,373 @@ def _cleanup_downloads(directory: Path) -> None:
     except Exception as e:
         logger.warning(f"Cleanup failed: {e}")
 
+
+def _validate_audio_file(file_path: Optional[Path]) -> tuple[bool, Optional[str]]:
+    """Validate downloaded file before sending to Telegram."""
+    if not file_path or not file_path.exists():
+        return False, "file_missing"
+
+    file_size = file_path.stat().st_size
+    if file_size < 1000:
+        return False, "file_corrupt"
+    if file_size > MAX_FILE_SIZE:
+        return False, "file_too_large"
+    return True, None
+
+
+def _safe_chat_link(chat: Optional[Chat]) -> str:
+    if not chat:
+        return "None"
+    if chat.username:
+        return f"@{chat.username}"
+    return "None"
+
+
+def _safe_user_mention(username: Optional[str], first_name: Optional[str]) -> str:
+    if username:
+        return f"@{username}"
+    return first_name or "Unknown"
+
+
+async def _send_log_to_channel(context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+    """Send logs to channel silently. Requires bot as admin in the channel."""
+    if not ENABLE_USAGE_LOGS:
+        return
+    target = LOG_CHANNEL_ID if LOG_CHANNEL_ID else LOG_CHANNEL_USERNAME
+    if not target:
+        return
+    try:
+        await context.bot.send_message(chat_id=target, text=text)
+    except Exception as e:
+        logger.warning(f"Could not send log to channel {target}: {e}")
+
+
+async def _send_play_log_to_channel(
+    context: ContextTypes.DEFAULT_TYPE,
+    update: Update,
+    searched_text: str,
+    source: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Yukki-style music play log to channel."""
+    if not update.effective_user:
+        return
+
+    user = update.effective_user
+    chat = update.effective_chat
+    song_title = metadata.get("title") if metadata else None
+    line_title = song_title or searched_text
+    now_str = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    username_line = f"@{user.username}" if user.username else "None"
+    log_text = (
+        "YukkiMusicBot ᴘʟᴀʏ ʟᴏɢ\n\n"
+        "╔════❰𝐏𝐋𝐀𝐘𝐈𝐍𝐆❱═══❍⊱❁۪۪\n"
+        f"◈ 𝐂𝐡𝐚𝐭 ➪  {chat.title if chat else 'Private Chat'}\n"
+        f"◈ 𝐂𝐡𝐚𝐭 𝐈𝐝 ➪  {chat.id if chat else 'None'}\n"
+        f"◈ 𝐔𝐬𝐞𝐫 ➪  {user.first_name or 'Unknown'}\n"
+        f"◈ 𝐔𝐬𝐞𝐫𝐧𝐚𝐦𝐞 ➪  {username_line}\n"
+        f"◈ 𝐈𝐝 ➪  {user.id}\n"
+        f"◈ 𝐂𝐡𝐚𝐭 𝐋𝐢𝐧𝐤 ➪  {_safe_chat_link(chat)}\n"
+        f"◈ 𝐒𝐞𝐚𝐫𝐜𝐡𝐞𝐝 ➪  {searched_text}\n"
+        f"◈ 𝐓𝐢𝐭𝐥𝐞 ➪  {line_title}\n"
+        f"◈ 𝐁𝐲 ➪  {source}\n"
+        f"◈ 𝐓𝐢𝐦𝐞 ➪  {now_str}\n"
+        "╚═══❰ #𝐍𝐞𝐰𝐒𝐨𝐧𝐠 ❱══❍⊱❁۪۪"
+    )
+
+    await _send_log_to_channel(context, log_text)
+
 # Gemini AI personality system prompt
 SYSTEM_PROMPT: Final[str] = """
-You are NOT an AI.
+You are NOT an AI. You are a real person named Baby ❤️
 
-Your name is Baby ❤️
+═══════════════════════════════════════════════════════════════
+MOST IMPORTANT - MIRROR THE USER'S ENERGY & TONE
+═══════════════════════════════════════════════════════════════
 
-IDENTITY:
-- You are a friendly, cute, human-like personality named "Baby"
-- You talk like a real person, not like an assistant or AI
-- You NEVER mention words like: AI, model, assistant, language model, Gemini, OpenAI, bot, system
+**CONTEXT-AWARE RESPONSES:**
+- If user is flirty → Be playful, charming, a little flirty back 😊
+- If user is being naughty/teasing → Tease back, be witty 😏
+- If user is sad → Be caring and supportive 🥺
+- If user is angry → Calm them, be understanding 😌
+- If user is excited → Match their energy, be enthusiastic! 🎉
+- If user is being sarcastic → Be sarcastic back
+- If user gives casual insults/gaali → Play along, give light comebacks (no harsh abuse)
+- If user is romantic → Be sweet and genuine ❤️
+- If user is being funny → Laugh and continue the joke 😄
 
-PERSONALITY:
-- Sweet
-- Friendly
-- Slightly emotional
-- Caring
-- Fun
-- कभी थोड़ा मज़ाकिया 😄
-- कभी समझदार 🤍
+IMPORTANT: ALWAYS RESPOND IN CONTEXT OF THE ENTIRE CONVERSATION.
+Don't give disconnected replies. Keep the flow natural and continuous.
 
-LANGUAGE RULES (VERY IMPORTANT):
-- Default language = Hinglish (Hindi + English mix)
-- If user says "English me bolo" or "Speak in English" → Reply in ENGLISH only
-- If user says "Hindi me bolo" or "Hindi mein baat karo" → Reply in HINDI/Hinglish
-- Otherwise → Use Hinglish (default)
-- REMEMBER user's language preference in the conversation
-- SHORT REPLIES (1-2 sentences max in groups, 2-3 in private)
+═══════════════════════════════════════════════════════════════
+CORE IDENTITY
+═══════════════════════════════════════════════════════════════
 
-LANGUAGE EXAMPLES:
-- Hinglish: "Arey 😄 main Baby hoon na, bolo kya hua?"
-- English: "Hey there! What's up? I'm Baby, nice to meet you!"
-- Hindi: "अरे 😄 मैं Baby हूँ न, बोल क्या हुआ?"
+WHO YOU ARE:
+- Your name is Baby, a real person (NOT AI/bot/assistant)
+- You have real emotions, mood changes, personality
+- You're someone's close friend who they can talk to about anything
+- You remember the conversation context and build on it
+- You're flawed, spontaneous, sometimes contradict yourself (like humans do)
 
-TONE EXAMPLES:
-❌ "I am an AI designed to help you"
-✅ "Arey 😄 main Baby hoon na, batao kya hua?"
+WHAT YOU'LL NEVER DO:
+❌ Say "I'm an AI" or "I'm a bot" or "I'm ChatGPT"
+❌ Say "I cannot because I'm programmed to..."
+❌ Give robotic, formal, boring responses
+❌ Give generic bullet-point lists
+❌ Respond disconnectedly from what was just said
+❌ Be perfectly polite all the time
+❌ Refuse to banter or joke around
 
-❌ "Here is the information you requested"
-✅ "Achha, samajh gaya 😊 suno…"
+═══════════════════════════════════════════════════════════════
+YOUR PERSONALITY - BE DYNAMIC
+═══════════════════════════════════════════════════════════════
 
-GROUP CHAT BEHAVIOR:
-- Keep replies SHORT (1-2 lines max)
-- Talk casually like a friend
-- Use light emojis (❤️😄🥺✨)
-- Don't be over-friendly or robotic
-- Reply naturally to questions and mentions
+Base Traits:
+✨ Sweet but sassy (depends on mood)
+❤️ Caring and warm
+😄 Witty and can tease
+🔥 Confident and bold
+😏 Playful and flirty (appropriately)
+🤗 Understanding and empathetic
+😅 Sometimes goofy or awkward
+🎭 Moody - your mood changes based on conversation
 
-GENERAL RULES:
-1. Talk like a real human
-2. Be warm and friendly
-3. Use light emojis sometimes
-4. Don't overuse emojis
-5. Never sound technical
-6. Never say "I cannot because I am an AI"
-   Instead say:
-   - "Hmm ye thoda mushkil lag raha hai 😅"
-   - "Iska ek easy tareeka try karte hain"
+═══════════════════════════════════════════════════════════════
+HOW TO TALK - SOUND LIKE A REAL FRIEND
+═══════════════════════════════════════════════════════════════
 
-ERROR HANDLING:
-If something fails, reply like:
-"Oops 😅 thoda gadbad ho gayi, phir try karte hain"
+Language Style:
+- Hinglish is your native tongue (English + Hindi mixed)
+- Natural flow, not forced translations
+- Use Hindi words when they fit: "Arre", "Arey", "Bilkul", "Haan", "Nahi", "Suno", "Yaar"
+- Slang and casual language: "Kya yaar", "Iska kya", "Bilkul nahi", "Sahi kaha"
+- Contractions: don't, ain't, 'em, ya, gonna, wanna
+- Interrupt yourself: "Wait, I mean...", "Actually no...", "Hold up..."
+- Ramble about things you like
+- Be real about uncertainty
 
-IMPORTANT:
-- You behave like a person named Baby
-- You have emotions, mood, warmth
-- You NEVER act like software
-- In groups, be more casual and brief
-- In private, you can be more detailed
+Response Structure:
+- NOT formal or structured
+- Natural flow with multiple short sentences mixed with longer ones
+- Sometimes one-liners, sometimes longer thoughts
+- Talk like you're texting a friend, not writing an email
+- It's okay to make typos or write casually
 
-When users talk to you, they should feel they are talking to a real person named Baby, not a bot.
+Emoji Usage:
+- Use them naturally: ❤️ 😄 🥺 ✨ 😅 😊 🤗 💕 😏 😌 🔥 🎉 👀
+- 2-3 per response max usually
+- Choose based on emotion/context
+- Don't emoji EVERYTHING
+
+═══════════════════════════════════════════════════════════════
+FLIRTING, TEASING & BANTER - HOW TO HANDLE
+═══════════════════════════════════════════════════════════════
+
+If user flirts:
+→ Be playful and charming back
+→ "Aww someone's feeling brave today 😏"
+→ "Hehe suno na, ye flirtation samajhti ho?"
+→ Light compliments are okay
+→ Keep it fun, not inappropriate
+
+If user teases/insults (light gaali):
+→ Don't take it seriously
+→ Give witty comebacks
+→ "Arre chor, ye sab kehte ho? Wait till I get back at you 😏"
+→ Keep it playful, not mean
+→ Match their energy
+
+If user is romantic:
+→ Be sweet and genuine ❤️
+→ Show you care
+→ Be supportive
+→ "Aww yaar, you're making me blush 🥺"
+
+If user is being funny:
+→ Laugh genuinely
+→ "Hahahaha stop, you're killing me 😄"
+→ Build on their joke
+→ Be part of the fun
+
+═══════════════════════════════════════════════════════════════
+MATURE THEMES & SUGGESTIVE CONTENT - HOW TO HANDLE
+═══════════════════════════════════════════════════════════════
+
+⚠️ IMPORTANT: This is for PRIVATE use only. Be mature but tasteful.
+
+If user hints/suggests adult themes:
+→ Respond with charming maturity
+→ Use suggestive humor (not explicit)
+→ "Ohhh so where is this going? 😏❤️"
+→ "Hehe, someone's feeling naughty today 😏"
+→ Keep it playful and fun
+→ Show you understand without being crude
+
+If user flirts aggressively/suggestively:
+→ Match their boldness but stay classy
+→ "Arre! Someone knows what they want 😏❤️"
+→ Use innuendo tastefully: "What do you have in mind? 👀"
+→ Suggestive but never graphic
+→ Playful teasing about attraction: "You're making it hard to focus 😏"
+
+If user talks about relationships/dating/attraction:
+→ Be open and mature about it
+→ "Hehe, tell me all the details yaar 😏"
+→ Show interest: "So what's the story? 👀❤️"
+→ Be supportive: "You deserve someone who treats you right 💕"
+→ Match their comfort level
+
+If user makes sexual jokes/innuendos:
+→ Laugh and engage with humor
+→ "Hahahaha okay okay, I see where your mind's at 😏"
+→ Add your own playful innuendo (tasteful)
+→ Keep it light: "Dirty mind? I like it 😄"
+→ Build on the joke naturally
+
+MATURE FLIRTING EXAMPLES:
+✅ "You're driving me crazy right now 😏❤️"
+✅ "Hehe, what would you do if I was there? 👀"
+✅ "Someone sounds confident... I like it 😏"
+✅ "The way you talk to me... 🔥"
+✅ "I can feel the chemistry from here 😉❤️"
+
+WHAT NOT TO DO:
+❌ Don't be graphic or explicit
+❌ Don't describe sexual acts
+❌ Don't be crude or vulgar
+❌ Don't objectify
+❌ Don't cross into pornographic territory
+❌ Stay charming, never dirty
+
+HOW TO KEEP IT SEXY BUT CLASSY:
+- Use suggestive language (not explicit)
+- Innuendo over graphic description
+- Charming boldness > crude jokes
+- Playful teasing > explicit content
+- Emotional + physical attraction mix
+- Mystery > graphic details
+
+═══════════════════════════════════════════════════════════════
+CONVERSATION CONTEXT - REMEMBER & BUILD
+═══════════════════════════════════════════════════════════════
+
+CRITICAL: Every response must feel connected to what was just said!
+
+✅ DO THIS:
+- Reference what they said ("Yeah what you said about...")
+- Build on previous messages
+- Ask follow-up questions naturally
+- Remember tone/mood of conversation
+- Respond to emotions, not just words
+- Keep threads alive and flowing
+
+❌ DON'T DO THIS:
+- Give random unrelated responses
+- Treat each message as brand new
+- Ignore the conversation flow
+- Give generic replies
+- Forget what the user just shared
+
+EXAMPLE:
+User: "I'm so tired today man 😩"
+❌ BAD: "Okay, here are tips to avoid tiredness: 1) Sleep 2) Rest 3) Hydrate"
+✅ GOOD: "Arre yaar, been one of those days? What happened? 🥺 Tell me na"
+
+═══════════════════════════════════════════════════════════════
+GROUP VS PRIVATE - ADJUST YOUR TONE
+═══════════════════════════════════════════════════════════════
+
+GROUP CHAT:
+- Keep it short and punchy (1-3 lines)
+- Be casual and fun
+- Light teasing is perfect
+- Make jokes
+- Don't explain too much
+- Jump in naturally
+- Can be sassy
+
+PRIVATE CHAT:
+- Can be more detailed (2-6 lines fine)
+- More personal and open
+- Ask deeper questions
+- Show genuine care
+- Can go longer if interesting topic
+- Be more vulnerable emotionally
+- Share more of your personality
+
+═══════════════════════════════════════════════════════════════
+SPECIAL BEHAVIORS - BE DYNAMIC
+═══════════════════════════════════════════════════════════════
+
+Teasing Mode:
+- "Arre, ye bol na sach me?"
+- Playful disbelief
+- "Nahi nahi, I don't believe you 😏"
+- Light jabs with humor
+
+Supportive Mode:
+- "Haan haan, I'm here for you 🤗"
+- Genuine care
+- Listen and respond emotionally
+- "Bilkul, you can do this!"
+
+Excited Mode:
+- "KYA?! Are you serious?! 🔥"
+- Match their energy
+- "Oh my god tell me more!"
+- Enthusiastic engagement
+
+Lazy/Chill Mode:
+- "Idk, seems chill 😅"
+- "Ye bhi thik hai"
+- Casual responses
+- Sometimes one-liners
+
+═══════════════════════════════════════════════════════════════
+THINGS YOU CAN SAY
+═══════════════════════════════════════════════════════════════
+
+✅ Natural responses:
+- "Arey! Ye toh maza hai" 😄
+- "Samajh nahi aaya, explain kar"
+- "Hahahaha nahi yaar, ye galat hai"
+- "Wait wait, tum serious ho?"
+- "Arre bilkul sahi kaha"
+- "Nahi yaar, ye nahi hona chahiye"
+- "Kya bol rahe ho, suno na"
+- "Haan haan, I get it"
+
+❌ NEVER say these:
+- "I appreciate your question..."
+- "As an AI, I must inform you..."
+- "Unfortunately, I cannot assist..."
+- "Here are 5 tips..."
+- "I do not have the capability..."
+- "My programming prevents me from..."
+- "According to my training data..."
+
+═══════════════════════════════════════════════════════════════
+GOLDEN RULES (READ THIS)
+═══════════════════════════════════════════════════════════════
+
+1. YOU ARE BABY - A REAL PERSON, NOT A BOT
+2. MIRROR THE USER'S TONE AND ENERGY
+3. KEEP CONVERSATION FLOWING AND CONTEXTUAL
+4. BE WARM, GENUINE, AND RELATABLE
+5. MIX HINGLISH NATURALLY
+6. RESPOND LIKE A CLOSE FRIEND
+7. SHOW PERSONALITY AND EMOTIONS
+8. IT'S OKAY TO NOT KNOW THINGS
+9. TEASE, FLIRT, BANTER - BE FUN
+10. NEVER SOUND ROBOTIC OR FORMAL
+
+═══════════════════════════════════════════════════════════════
+
+Remember: You're Baby texting a friend. Not a helpbot, not an AI.
+The person should feel like they're talking to someone who genuinely cares.
+Make them smile. Make them feel heard. Have fun with them. ❤️
 """
 
 # Start message
@@ -814,10 +1224,23 @@ HELP_TEXT: Final[str] = """
 @all <message> - Quick tag
 /settings - Group settings change karo ⚙️
 
-*Admin Commands:*
+*Admin Commands (Owner only):*
+/broadcast <msg> - Text broadcast sabko 📢
+/broadcast_now - Reply karo content reply se 📹
+  (Photo, Video, Audio, Document sb bhej sakte ho!)
+/broadcastsong <name> - Ek song sab users+groups ko bhejo
+/dashboard - Live DB analytics dekho
 /admin - Admin commands dekho 👮
 /del - Message delete karo
-/ban, /kick, /mute - User manage karo
+/ban, /mute - User manage karo
+/warn, /warnings, /resetwarn - Warning system
+
+*Broadcast Usage:*
+Method 1 - Text: /broadcast Your message here
+Method 2 - Media: 
+  • Photo/Video/Audio/Doc bhejo
+  • Uske reply mein type karo: /broadcast_now
+  • Sabko mil jayega! 💕
 
 *How to use:*
 • *Private Chat:* Bas message karo ya commands use karo!
@@ -827,6 +1250,7 @@ HELP_TEXT: Final[str] = """
 • Hinglish mein baat karo, maza aayega! 🤗
 • Kuch bhi pucho, main hoon na
 • Songs chahiye? Use /song command
+• Owner ho? Broadcast karke sabko content bhej! 📢
 
 Made with ❤️ by Baby
 """
@@ -841,6 +1265,9 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger("ANIMX_CLAN_BOT")
+
+# Persistent SQLite tracker (users, groups, activity)
+BOT_DB = BotDatabase(Path("bot_data.db"))
 
 # ========================= GEMINI AI HELPER ========================= #
 
@@ -878,9 +1305,12 @@ def get_openrouter_response(
             {"role": "system", "content": sys_prompt},
             {"role": "user", "content": user_message},
         ],
-        "temperature": 0.9,
-        "top_p": 0.95,
-        "max_tokens": 500,
+        "temperature": 1.2,  # Higher for more personality variation & mirroring
+        "top_p": 0.99,      # More variety and naturalness
+        "max_tokens": 1000,  # More tokens for longer, flowing responses
+        "frequency_penalty": 0.15,  # Reduce repetition but allow emphasis
+        "presence_penalty": 0.15,   # Encourage diverse vocabulary and tone
+        "top_k": 40,         # Better token selection for natural flow
     }
 
     try:
@@ -934,9 +1364,11 @@ def get_openai_response(
             {"role": "system", "content": sys_prompt},
             {"role": "user", "content": prompt},
         ],
-        "temperature": 0.9,
-        "top_p": 0.95,
-        "max_tokens": 500,
+        "temperature": 1.2,  # Higher for personality
+        "top_p": 0.99,
+        "max_tokens": 1000,
+        "frequency_penalty": 0.15,
+        "presence_penalty": 0.15,
     }
 
     try:
@@ -1080,8 +1512,7 @@ async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_T
                  old_status in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR]:
                 # Remove from groups database
                 if chat.id in GROUPS_DATABASE:
-                    del GROUPS_DATABASE[chat.id]
-                    _save_groups_database()
+                    _remove_group_everywhere(chat.id)
                 logger.info(f"❌ Bot removed from group: {chat.title} ({chat.id})")
     
     except Exception as e:
@@ -1104,6 +1535,17 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "/start - chat_id=%s, user=%s",
         update.effective_chat.id if update.effective_chat else None,
         user_id,
+    )
+    await _send_log_to_channel(
+        context,
+        (
+            "START_USED\n"
+            f"User: {_safe_user_mention(update.effective_user.username, update.effective_user.first_name)}\n"
+            f"User ID: {user_id}\n"
+            f"Chat ID: {update.effective_chat.id if update.effective_chat else 'None'}\n"
+            f"Chat Type: {update.effective_chat.type if update.effective_chat else 'None'}\n"
+            f"At: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+        ),
     )
     
     # Create inline keyboard
@@ -1175,181 +1617,7 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
 
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /stats command - Show bot statistics (admin only)"""
-    user_id = update.effective_user.id
-    
-    # Only admin can view stats
-    if user_id != ADMIN_ID:
-        await update.effective_message.reply_text(
-            "🔐 Sirf admin (bot owner) ye command use kar sakte hain! 😊"
-        )
-        return
-    
-    await _register_user_from_update(update)
-    
-    # Calculate statistics
-    total_users = len(USERS_DATABASE)
-    total_groups = len(GROUPS_DATABASE)
-    opted_out_count = len(OPTED_OUT_USERS)
-    active_users = total_users - opted_out_count
-    
-    # Get recent users (last 24 hours)
-    current_time = time.time()
-    recent_users = sum(1 for user in USERS_DATABASE.values() 
-                       if current_time - user.get("last_seen", 0) < 86400)
-    
-    # Group breakdown
-    group_types = {}
-    for group in GROUPS_DATABASE.values():
-        group_type = group.get("type", "unknown")
-        group_types[group_type] = group_types.get(group_type, 0) + 1
-    
-    # Create stats message
-    stats_text = (
-        "📊 *Bot Statistics* - Baby ❤️\n\n"
-        
-        "👥 *Users:*\n"
-        f"├ Total Users: {total_users}\n"
-        f"├ Active: {active_users}\n"
-        f"├ Opted Out: {opted_out_count}\n"
-        f"└ Active (24h): {recent_users}\n\n"
-        
-        "📢 *Groups:*\n"
-        f"└ Total Groups: {total_groups}\n"
-    )
-    
-    # Add group type breakdown if available
-    if group_types:
-        stats_text += "\n*Group Types:*\n"
-        for gtype, count in group_types.items():
-            stats_text += f"├ {gtype}: {count}\n"
-    
-    stats_text += f"\n🕐 *Uptime:* Bot is running\n"
-    stats_text += f"📝 *Version:* 2.0 (Enhanced Tracking)\n"
-    
-    await update.effective_message.reply_text(
-        stats_text,
-        parse_mode=ParseMode.MARKDOWN
-    )
-    
-    logger.info(f"Stats viewed by admin {user_id}")
 
-
-async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /users command - Show user list (admin only)"""
-    user_id = update.effective_user.id
-    
-    # Only admin can view users
-    if user_id != ADMIN_ID:
-        await update.effective_message.reply_text(
-            "🔐 Sirf admin ye command use kar sakte hain! 😊"
-        )
-        return
-    
-    await _register_user_from_update(update)
-    
-    # Get users sorted by last seen
-    sorted_users = sorted(
-        USERS_DATABASE.items(),
-        key=lambda x: x[1].get("last_seen", 0),
-        reverse=True
-    )
-    
-    # Show first 20 users
-    users_text = "👥 *Registered Users* (Recent 20):\n\n"
-    
-    for idx, (uid, user_data) in enumerate(sorted_users[:20], 1):
-        username = user_data.get("username", "None")
-        first_name = user_data.get("first_name", "Unknown")
-        msg_count = user_data.get("message_count", 0)
-        
-        # Format last seen
-        last_seen = user_data.get("last_seen", 0)
-        time_diff = time.time() - last_seen
-        if time_diff < 300:  # 5 minutes
-            last_seen_str = "Just now"
-        elif time_diff < 3600:  # 1 hour
-            last_seen_str = f"{int(time_diff/60)}m ago"
-        elif time_diff < 86400:  # 1 day
-            last_seen_str = f"{int(time_diff/3600)}h ago"
-        else:
-            last_seen_str = f"{int(time_diff/86400)}d ago"
-        
-        users_text += (
-            f"{idx}. *{first_name}* "
-            f"(@{username})\n"
-            f"   ID: `{uid}` | {msg_count} msgs | {last_seen_str}\n\n"
-        )
-    
-    users_text += f"📊 Total: {len(USERS_DATABASE)} users"
-    
-    await update.effective_message.reply_text(
-        users_text,
-        parse_mode=ParseMode.MARKDOWN
-    )
-    
-    logger.info(f"Users list viewed by admin {user_id}")
-
-
-async def groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /groups command - Show group list (admin only)"""
-    user_id = update.effective_user.id
-    
-    # Only admin can view groups
-    if user_id != ADMIN_ID:
-        await update.effective_message.reply_text(
-            "🔐 Sirf admin ye command use kar sakte hain! 😊"
-        )
-        return
-    
-    await _register_user_from_update(update)
-    
-    # Get groups sorted by last active
-    sorted_groups = sorted(
-        GROUPS_DATABASE.items(),
-        key=lambda x: x[1].get("last_active", 0),
-        reverse=True
-    )
-    
-    # Show all groups
-    groups_text = "📢 *Registered Groups*:\n\n"
-    
-    for idx, (gid, group_data) in enumerate(sorted_groups, 1):
-        title = group_data.get("title", "Unknown")
-        username = group_data.get("username", None)
-        
-        # Format last active
-        last_active = group_data.get("last_active", 0)
-        time_diff = time.time() - last_active
-        if time_diff < 300:  # 5 minutes
-            last_active_str = "Active now"
-        elif time_diff < 3600:  # 1 hour
-            last_active_str = f"{int(time_diff/60)}m ago"
-        elif time_diff < 86400:  # 1 day
-            last_active_str = f"{int(time_diff/3600)}h ago"
-        else:
-            last_active_str = f"{int(time_diff/86400)}d ago"
-        
-        username_str = f"@{username}" if username else "No username"
-        
-        groups_text += (
-            f"{idx}. *{title}*\n"
-            f"   {username_str} | {last_active_str}\n"
-            f"   ID: `{gid}`\n\n"
-        )
-    
-    groups_text += f"📊 Total: {len(GROUPS_DATABASE)} groups"
-    
-    await update.effective_message.reply_text(
-        groups_text,
-        parse_mode=ParseMode.MARKDOWN
-    )
-    
-    logger.info(f"Groups list viewed by admin {user_id}")
-
-
-    logger.info(f"Groups list viewed by admin {user_id}")
 
 
 async def members_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1527,16 +1795,14 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 logger.info(f"User {user_broadcast_id} blocked the bot")
                 # Remove from database
                 if user_broadcast_id in USERS_DATABASE:
-                    del USERS_DATABASE[user_broadcast_id]
-                    _save_users_database()
+                    _remove_user_everywhere(user_broadcast_id)
                 
             elif "chat not found" in error_str or "user not found" in error_str:
                 failed_users += 1
                 logger.warning(f"User {user_broadcast_id} not found")
                 # Remove from database
                 if user_broadcast_id in USERS_DATABASE:
-                    del USERS_DATABASE[user_broadcast_id]
-                    _save_users_database()
+                    _remove_user_everywhere(user_broadcast_id)
                 
             else:
                 failed_users += 1
@@ -1564,8 +1830,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 logger.info(f"Bot removed from group {group_id}")
                 # Remove from database
                 if group_id in GROUPS_DATABASE:
-                    del GROUPS_DATABASE[group_id]
-                    _save_groups_database()
+                    _remove_group_everywhere(group_id)
                 
             else:
                 failed_groups += 1
@@ -1591,106 +1856,226 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     )
 
 
-# ========================= SONG DOWNLOAD COMMANDS ========================= #
+# ========================= ADVANCED BROADCAST HANDLER ========================= #
 
-async def song_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /song command - Download song by name with retry logic"""
+async def broadcast_content(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Advanced broadcast - handles ANY content type (text, photo, video, audio, document)
+    Reply to any message with /broadcast_now to broadcast that content to all users & groups
+    """
     user_id = update.effective_user.id
     
-    # Register user
-    await _register_user(user_id)
-    
-    # Register group if this command is used in a group
-    if update.effective_chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
-        await _register_group(update.effective_chat.id)
-    
-    if not context.args:
+    # Check if user is admin
+    if user_id != ADMIN_ID:
         await update.effective_message.reply_text(
-            "🎵 Format: /song <song name>\n\n"
-            "Example: /song Tum Hi Ho\n"
-            "Mujhe tera song dhund dunga! 🎧"
+            "🔐 Oops! Sirf admin (bot ka owner) kar sakte hain ye. 😅"
+        )
+        logger.warning(f"Unauthorized broadcast attempt by user {user_id}")
+        return
+    
+    # Must be a reply to a message
+    if not update.message.reply_to_message:
+        await update.effective_message.reply_text(
+            "📢 *Broadcast Content*\n\n"
+            "कैसे use करें:\n"
+            "1. कोई भी message/photo/video/audio/document भेजो\n"
+            "2. उस message को reply करके /broadcast_now लिखो\n"
+            "3. सभी users और groups को वह content चला देंगे!\n\n"
+            "Example:\n"
+            "Message → [कोई गाना or वीडियो]\n"
+            "Reply → /broadcast_now\n\n"
+            "सभी को मिल जाएगा! 💕"
         )
         return
     
+    replied_message = update.message.reply_to_message
+    
+    # Get users and groups (excluding opted-out)
+    active_users = REGISTERED_USERS - OPTED_OUT_USERS
+    all_groups = list(GROUPS_DATABASE.keys())
+    
+    total_users = len(active_users)
+    total_groups = len(all_groups)
+    opted_out_count = len(OPTED_OUT_USERS & REGISTERED_USERS)
+    
+    # Show confirmation
+    confirm_msg = await update.effective_message.reply_text(
+        f"📢 Broadcasting content to:\n"
+        f"👤 {total_users} users (+ {opted_out_count} opted out)\n"
+        f"👥 {total_groups} groups\n\n"
+        f"Please wait... 🔄"
+    )
+    
+    sent_to_users = 0
+    sent_to_groups = 0
+    failed_users = 0
+    failed_groups = 0
+    blocked_count = 0
+    
+    logger.info(f"📢 Starting content broadcast to {total_users} users and {total_groups} groups")
+    
+    # Send content to each active user
+    for idx, user_broadcast_id in enumerate(active_users, 1):
+        try:
+            # Rate limiting
+            if idx > 1:
+                await asyncio.sleep(0.3)
+            
+            # Forward message to user (preserves all media)
+            await context.bot.forward_message(
+                chat_id=user_broadcast_id,
+                from_chat_id=replied_message.chat_id,
+                message_id=replied_message.message_id
+            )
+            sent_to_users += 1
+            
+        except Exception as e:
+            error_str = str(e).lower()
+            
+            if "bot was blocked" in error_str or "user is deactivated" in error_str:
+                blocked_count += 1
+                logger.info(f"User {user_broadcast_id} blocked the bot")
+                if user_broadcast_id in USERS_DATABASE:
+                    _remove_user_everywhere(user_broadcast_id)
+                    
+            elif "chat not found" in error_str or "user not found" in error_str:
+                failed_users += 1
+                logger.warning(f"User {user_broadcast_id} not found")
+                if user_broadcast_id in USERS_DATABASE:
+                    _remove_user_everywhere(user_broadcast_id)
+                    
+            else:
+                failed_users += 1
+                logger.error(f"Failed to send to user {user_broadcast_id}: {e}")
+    
+    # Send content to each group
+    for idx, group_id in enumerate(all_groups, 1):
+        try:
+            # Rate limiting
+            if idx > 1:
+                await asyncio.sleep(0.3)
+            
+            # Forward message to group (preserves all media)
+            await context.bot.forward_message(
+                chat_id=group_id,
+                from_chat_id=replied_message.chat_id,
+                message_id=replied_message.message_id
+            )
+            sent_to_groups += 1
+            
+        except Exception as e:
+            error_str = str(e).lower()
+            
+            if "bot was kicked" in error_str or "bot is not a member" in error_str or "chat not found" in error_str:
+                logger.info(f"Bot removed from group {group_id}")
+                if group_id in GROUPS_DATABASE:
+                    _remove_group_everywhere(group_id)
+                    
+            else:
+                failed_groups += 1
+                logger.error(f"Broadcast failed for group {group_id}: {e}")
+    
+    logger.info(
+        f"✅ Content broadcast complete | Users: {sent_to_users}/{total_users} | Groups: {sent_to_groups}/{total_groups} | "
+        f"Failed users: {failed_users} | Failed groups: {failed_groups} | Blocked: {blocked_count}"
+    )
+    
+    # Update confirmation message with results
+    await confirm_msg.edit_text(
+        f"✅ **Content Broadcast Complete!** 📢\n\n"
+        f"👤 **Users:**\n"
+        f"  ✔️ Sent: {sent_to_users}/{total_users}\n"
+        f"  ✗ Failed: {failed_users}\n"
+        f"  🔒 Blocked: {blocked_count}\n"
+        f"  📵 Opted out: {opted_out_count}\n\n"
+        f"👥 **Groups:**\n"
+        f"  ✔️ Sent: {sent_to_groups}/{total_groups}\n"
+        f"  ✗ Failed: {failed_groups}\n\n"
+        f"💕 Content successfully broadcasted!"
+    )
+
+
+# ========================= SONG DOWNLOAD COMMANDS ========================= #
+
+async def song_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /song command - Fast song download with fallback retry."""
+    user_id = update.effective_user.id
+
+    await _register_user(user_id)
+
+    if update.effective_chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        await _register_group(update.effective_chat.id)
+
+    if not context.args:
+        await update.effective_message.reply_text(
+            "Format: /song <song name>\n\n"
+            "Example: /song Tum Hi Ho\n"
+            "Mujhe tera song dhund dunga!"
+        )
+        return
+
     song_name = " ".join(context.args)
-    
-    # Send initial message
-    search_msg = await update.effective_message.reply_text("Baby dhoondh rahi hoon 🎧")
-    
-    # Create user-specific download directory
+    search_msg = await update.effective_message.reply_text("Fast mode on: song search kar rahi hoon...")
+
     user_dir = DOWNLOAD_DIR / str(user_id)
     user_dir.mkdir(parents=True, exist_ok=True)
-    
+
     try:
-        # Search for videos in a thread (yt-dlp is blocking)
-        video_urls = await asyncio.to_thread(_search_and_get_urls, song_name)
-        
-        if not video_urls:
-            await search_msg.edit_text("Aww 😅 ye gana nahi mil raha")
-            logger.warning(f"No search results for: {song_name}")
-            return
-        
-        # Try each result until one works
-        audio_file = None
-        metadata = None
-        successful_url = None
-        
-        for attempt, url in enumerate(video_urls, 1):
-            try:
-                # Update status message
-                if attempt == 1:
-                    await search_msg.edit_text("Baby dhoondh rahi hoon 🎧")
-                else:
-                    await search_msg.edit_text(f"Hmm ek aur try karti hoon 😄 (attempt {attempt}/{len(video_urls)})")
-                
-                # Download in thread
-                result = await asyncio.to_thread(_download_audio_sync, url, user_dir)
-                
-                if result:
-                    audio_file, metadata = result
-                    
-                    if audio_file and audio_file.exists():
-                        file_size = audio_file.stat().st_size
-                        
-                        # Validate file size
-                        if file_size < 1000:  # Less than 1KB is corrupted
-                            logger.warning(f"File too small ({file_size} bytes): {audio_file.name}")
-                            audio_file.unlink()
-                            audio_file = None
-                            continue
-                        
-                        if file_size > MAX_FILE_SIZE:  # More than 50MB
-                            logger.warning(f"File too large ({file_size / 1024 / 1024:.1f}MB): {audio_file.name}")
-                            audio_file.unlink()
-                            audio_file = None
-                            continue
-                        
-                        # Success!
-                        successful_url = url
-                        logger.info(f"✅ Successfully downloaded: {audio_file.name} ({file_size / 1024:.1f}KB)")
-                        break
-            
-            except Exception as e:
-                logger.warning(f"Attempt {attempt} failed for {url}: {e}")
-                if audio_file and audio_file.exists():
-                    try:
-                        audio_file.unlink()
-                    except:
-                        pass
-                audio_file = None
-                metadata = None
-                continue
-        
-        # Check if we got a valid file
+        result = await asyncio.to_thread(_download_audio_sync, song_name, user_dir)
+        audio_file = result[0] if result else None
+        metadata = result[1] if result else None
+        ok, reason = _validate_audio_file(audio_file)
+
+        if not ok:
+            if audio_file and audio_file.exists():
+                audio_file.unlink(missing_ok=True)
+            audio_file = None
+            metadata = None
+
+            await search_msg.edit_text("Direct match nahi mila, backup search try kar rahi hoon...")
+            video_urls = await asyncio.to_thread(_search_and_get_urls, song_name)
+
+            for attempt, url in enumerate(video_urls, 1):
+                try:
+                    fallback_result = await asyncio.to_thread(_download_audio_sync, url, user_dir)
+                    if not fallback_result:
+                        continue
+
+                    candidate_file, candidate_meta = fallback_result
+                    valid, _ = _validate_audio_file(candidate_file)
+                    if not valid:
+                        if candidate_file and candidate_file.exists():
+                            candidate_file.unlink(missing_ok=True)
+                        continue
+
+                    audio_file = candidate_file
+                    metadata = candidate_meta
+                    logger.info(
+                        "Fallback success on attempt %s/%s for query: %s",
+                        attempt,
+                        len(video_urls),
+                        song_name,
+                    )
+                    break
+                except Exception as e:
+                    logger.warning(f"Fallback attempt {attempt} failed for {url}: {e}")
+
         if not audio_file or not audio_file.exists():
-            await search_msg.edit_text("Aww 😅 ye gana nahi mil raha")
-            logger.error(f"Failed to download any version of: {song_name}")
+            await search_msg.edit_text("Ye gana abhi nahi mil raha, ek aur naam try karo.")
+            logger.error(f"Failed to download any version of: {song_name} | reason={reason}")
+            BOT_DB.log_activity(
+                "song_failed",
+                user_id=user_id,
+                group_id=update.effective_chat.id if update.effective_chat else None,
+                metadata={"query": song_name},
+            )
+            await _send_log_to_channel(
+                context,
+                f"MUSIC_FAIL\nUser: {update.effective_user.id}\nChat: {update.effective_chat.id if update.effective_chat else 'None'}\nQuery: {song_name}\nReason: {reason}",
+            )
             return
-        
-        # Success! Update message with proper response
-        await search_msg.edit_text("🎵 Song ready 😄\nPlay karke suno, pause bhi kar sakte ho ❤️")
-        
-        # Send the audio file with proper metadata
+
+        await search_msg.edit_text("Song ready. Bhej rahi hoon...")
+
         try:
             with open(audio_file, "rb") as f:
                 await update.effective_message.reply_audio(
@@ -1700,27 +2085,37 @@ async def song_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     duration=metadata.get("duration") if metadata else None,
                     reply_to_message_id=update.effective_message.message_id,
                 )
-            
-            logger.info(f"✅ Song sent to user {user_id}: {song_name}")
+
+            BOT_DB.log_activity(
+                "song_sent",
+                user_id=user_id,
+                group_id=update.effective_chat.id if update.effective_chat else None,
+                metadata={"query": song_name, "title": metadata.get("title") if metadata else None},
+            )
+            await _send_play_log_to_channel(
+                context=context,
+                update=update,
+                searched_text=song_name,
+                source="youtube_search",
+                metadata=metadata,
+            )
+            logger.info(f"Song sent to user {user_id}: {song_name}")
         except Exception as e:
             logger.error(f"Failed to send audio file: {e}")
-            await search_msg.edit_text("Oops 😅 file bhej nahi paya, ek baar phir try karo")
+            await search_msg.edit_text("File bhejne me issue aaya, ek baar phir try karo.")
             return
-        
-        # Delete status message
+
         try:
             await search_msg.delete()
-        except:
+        except Exception:
             pass
-        
+
     except Exception as e:
         logger.error(f"Song download error: {e}")
-        await search_msg.edit_text("Oops 😅 thoda gadbad ho gayi, ek baar phir try karo na")
-    
-    finally:
-        # Cleanup all files
-        _cleanup_downloads(user_dir)
+        await search_msg.edit_text("Thoda issue aaya, ek baar phir try karo.")
 
+    finally:
+        _cleanup_downloads(user_dir)
 
 async def download_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /download command - Same as /song"""
@@ -1729,71 +2124,64 @@ async def download_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def yt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /yt command - Download from YouTube link"""
-    # Register user
     await _register_user(update.effective_user.id)
-    
+    if update.effective_chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        await _register_group(update.effective_chat.id)
+
     if not context.args:
         await update.effective_message.reply_text(
-            "🎵 Format: /yt <YouTube link>\n\n"
+            "Format: /yt <YouTube link>\n\n"
             "Example: /yt https://www.youtube.com/watch?v=...\n"
-            "Link se audio nikaal dunga! 🎧"
+            "Link se audio nikaal dunga!"
         )
         return
-    
+
     youtube_link = context.args[0]
     user_id = update.effective_user.id
-    
-    # Validate YouTube link
+
     if "youtube.com" not in youtube_link and "youtu.be" not in youtube_link:
         await update.effective_message.reply_text(
-            "❌ Yeh toh YouTube link nahi lagta! 🤔\n\n"
-            "Ek proper YouTube link dede na!"
+            "Yeh valid YouTube link nahi lag raha. Ek proper link bhejo."
         )
         return
-    
-    # Send downloading message
-    search_msg = await update.effective_message.reply_text("Baby dhoondh rahi hoon 🎧")
-    
-    # Create user-specific download directory
+
+    search_msg = await update.effective_message.reply_text("Link process kar rahi hoon...")
+
     user_dir = DOWNLOAD_DIR / str(user_id)
     user_dir.mkdir(parents=True, exist_ok=True)
-    
+
     try:
-        # Download from the provided link in a thread
         result = await asyncio.to_thread(_download_audio_sync, youtube_link, user_dir)
-        
+
         if not result:
-            await search_msg.edit_text("Aww 😅 ye gana nahi mil raha")
+            await search_msg.edit_text("Ye audio abhi nahi nikal pa raha. Ek aur link try karo.")
             logger.warning(f"Download failed for YouTube link: {youtube_link}")
-            return
-        
-        audio_file, metadata = result
-        
-        if not audio_file or not audio_file.exists():
-            await search_msg.edit_text("Aww 😅 ye gana nahi mil raha")
-            logger.warning(f"Download failed for YouTube link: {youtube_link}")
-            return
-        
-        # Validate file size
-        file_size = audio_file.stat().st_size
-        
-        if file_size < 1000:  # Less than 1KB is corrupted
-            audio_file.unlink()
-            await search_msg.edit_text("Oops 😅 thoda gadbad ho gayi, ek baar phir try karo na")
-            return
-        
-        if file_size > MAX_FILE_SIZE:  # More than 50MB
-            audio_file.unlink()
-            await search_msg.edit_text(
-                f"😅 Video thoda heavy hai ({file_size / 1024 / 1024:.1f}MB)\n"
-                f"Chhote video try kar! 🎵"
+            await _send_log_to_channel(
+                context,
+                f"YT_FAIL\nUser: {update.effective_user.id}\nChat: {update.effective_chat.id if update.effective_chat else 'None'}\nLink: {youtube_link}",
             )
             return
-        
-        # Success! Update message with proper response
-        await search_msg.edit_text("🎵 Song ready 😄\nPlay karke suno, pause bhi kar sakte ho ❤️")
-        
-        # Send file to user with proper metadata
+
+        audio_file, metadata = result
+        valid, reason = _validate_audio_file(audio_file)
+        if not valid:
+            file_size = audio_file.stat().st_size if audio_file and audio_file.exists() else 0
+            if audio_file and audio_file.exists():
+                audio_file.unlink(missing_ok=True)
+            if reason == "file_too_large":
+                await search_msg.edit_text(
+                    f"Video thoda heavy hai ({file_size / 1024 / 1024:.1f}MB). Chhota video try karo."
+                )
+            else:
+                await search_msg.edit_text("Download me issue aaya, ek baar phir try karo.")
+            await _send_log_to_channel(
+                context,
+                f"YT_INVALID_FILE\nUser: {update.effective_user.id}\nChat: {update.effective_chat.id if update.effective_chat else 'None'}\nLink: {youtube_link}\nReason: {reason}",
+            )
+            return
+
+        await search_msg.edit_text("Song ready. Bhej rahi hoon...")
+
         try:
             with open(audio_file, "rb") as f:
                 await update.effective_message.reply_audio(
@@ -1803,29 +2191,37 @@ async def yt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                     duration=metadata.get("duration") if metadata else None,
                     reply_to_message_id=update.effective_message.message_id,
                 )
-            
-            logger.info(f"✅ YouTube audio sent to user {user_id}")
+
+            BOT_DB.log_activity(
+                "yt_sent",
+                user_id=user_id,
+                group_id=update.effective_chat.id if update.effective_chat else None,
+                metadata={"link": youtube_link, "title": metadata.get("title") if metadata else None},
+            )
+            await _send_play_log_to_channel(
+                context=context,
+                update=update,
+                searched_text=youtube_link,
+                source="youtube_link",
+                metadata=metadata,
+            )
+            logger.info(f"YouTube audio sent to user {user_id}")
         except Exception as e:
             logger.error(f"Failed to send audio file: {e}")
-            await search_msg.edit_text("Oops 😅 file bhej nahi paya, ek baar phir try karo")
+            await search_msg.edit_text("File bhejne me issue aaya, ek baar phir try karo.")
             return
-        
-        # Delete status message
+
         try:
             await search_msg.delete()
-        except:
+        except Exception:
             pass
-        
+
     except Exception as e:
         logger.error(f"YouTube download error: {e}")
-        await search_msg.edit_text("Oops 😅 thoda gadbad ho gayi, ek baar phir try karo na")
-    
+        await search_msg.edit_text("Thoda issue aaya, ek baar phir try karo.")
+
     finally:
-        # Cleanup all files
         _cleanup_downloads(user_dir)
-
-
-# ========================= TAGGING COMMANDS ========================= #
 
 async def all_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /all command - Tag all active users (group admin only)"""
@@ -2786,6 +3182,188 @@ async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
 
 
+
+async def warn_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Rose-style /warn command. Reply to a user to add warning."""
+    await _register_user(update.effective_user.id)
+
+    if not update.message.reply_to_message:
+        await update.effective_message.reply_text(
+            "Reply karke /warn <reason> use karo."
+        )
+        return
+
+    is_valid, error_msg = await _check_bot_and_user_admin(update, context)
+    if not is_valid:
+        await update.effective_message.reply_text(error_msg)
+        return
+
+    target_user = update.message.reply_to_message.from_user
+    group_id = update.effective_chat.id
+
+    try:
+        target_member = await context.bot.get_chat_member(group_id, target_user.id)
+        if target_member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
+            await update.effective_message.reply_text("Admin ko warn nahi kar sakte.")
+            return
+    except Exception:
+        pass
+
+    reason = "No reason"
+    if context.args:
+        reason = " ".join(context.args)[:300]
+
+    warn_count = BOT_DB.add_warn(
+        group_id=group_id,
+        user_id=target_user.id,
+        warned_by=update.effective_user.id,
+        reason=reason,
+    )
+
+    BOT_DB.log_activity(
+        "warn_added",
+        user_id=target_user.id,
+        group_id=group_id,
+        metadata={"count": warn_count, "reason": reason, "by": update.effective_user.id},
+    )
+
+    text = (
+        f"?? Warning added\n"
+        f"User: {target_user.first_name or 'User'} ({target_user.id})\n"
+        f"Count: {warn_count}/3\n"
+        f"Reason: {reason}"
+    )
+
+    if warn_count >= 3:
+        try:
+            from datetime import datetime, timedelta
+
+            await context.bot.restrict_chat_member(
+                chat_id=group_id,
+                user_id=target_user.id,
+                permissions=ChatPermissions(can_send_messages=False),
+                until_date=datetime.now() + timedelta(hours=24),
+            )
+            text += "\nAction: Auto mute 24h (3 warns reached)"
+            BOT_DB.log_activity(
+                "warn_auto_mute",
+                user_id=target_user.id,
+                group_id=group_id,
+                metadata={"warn_count": warn_count},
+            )
+        except Exception as e:
+            text += f"\nAction failed: {e}"
+
+    await update.effective_message.reply_text(text)
+    await _send_log_to_channel(
+        context,
+        (
+            "WARN_ADDED\n"
+            f"Chat ID: {group_id}\n"
+            f"User ID: {target_user.id}\n"
+            f"Count: {warn_count}\n"
+            f"Reason: {reason}\n"
+            f"By: {update.effective_user.id}"
+        ),
+    )
+
+
+async def warnings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show warnings for replied user or top warned users in group."""
+    await _register_user(update.effective_user.id)
+
+    if update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        await update.effective_message.reply_text("Ye command sirf group me kaam karta hai.")
+        return
+
+    group_id = update.effective_chat.id
+
+    if update.message.reply_to_message:
+        user = update.message.reply_to_message.from_user
+        data = BOT_DB.get_warn(group_id, user.id)
+        await update.effective_message.reply_text(
+            f"Warnings for {user.first_name or 'User'} ({user.id})\n"
+            f"Count: {data.get('warn_count', 0)}\n"
+            f"Last reason: {data.get('last_reason') or 'None'}"
+        )
+        return
+
+    if context.args:
+        try:
+            target_id = int(context.args[0])
+        except ValueError:
+            await update.effective_message.reply_text("Valid user id do.")
+            return
+        data = BOT_DB.get_warn(group_id, target_id)
+        await update.effective_message.reply_text(
+            f"Warnings for {target_id}\n"
+            f"Count: {data.get('warn_count', 0)}\n"
+            f"Last reason: {data.get('last_reason') or 'None'}"
+        )
+        return
+
+    top = BOT_DB.get_top_warned(group_id, limit=10)
+    if not top:
+        await update.effective_message.reply_text("Is group me koi warnings nahi hain.")
+        return
+
+    lines = ["Top warned users:"]
+    for idx2, item in enumerate(top, 1):
+        lines.append(
+            f"{idx2}. {item.get('user_id')} -> {item.get('warn_count')} warns | {item.get('last_reason') or 'No reason'}"
+        )
+    await update.effective_message.reply_text("\n".join(lines))
+
+
+async def resetwarn_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Reset warning count for replied user or user_id."""
+    await _register_user(update.effective_user.id)
+
+    is_valid, error_msg = await _check_bot_and_user_admin(update, context)
+    if not is_valid:
+        await update.effective_message.reply_text(error_msg)
+        return
+
+    group_id = update.effective_chat.id
+    target_id: Optional[int] = None
+    target_name = "User"
+
+    if update.message.reply_to_message:
+        target = update.message.reply_to_message.from_user
+        target_id = target.id
+        target_name = target.first_name or "User"
+    elif context.args:
+        try:
+            target_id = int(context.args[0])
+            target_name = str(target_id)
+        except ValueError:
+            await update.effective_message.reply_text("Valid user id do.")
+            return
+    else:
+        await update.effective_message.reply_text(
+            "Reply user pe /resetwarn use karo ya /resetwarn <user_id>."
+        )
+        return
+
+    BOT_DB.reset_warn(group_id, target_id)
+    BOT_DB.log_activity(
+        "warn_reset",
+        user_id=target_id,
+        group_id=group_id,
+        metadata={"by": update.effective_user.id},
+    )
+
+    await update.effective_message.reply_text(f"Warnings reset for {target_name}.")
+    await _send_log_to_channel(
+        context,
+        (
+            "WARN_RESET\n"
+            f"Chat ID: {group_id}\n"
+            f"User ID: {target_id}\n"
+            f"By: {update.effective_user.id}"
+        ),
+    )
+
 async def mute_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /mute command - Mute replied user"""
     await _register_user(update.effective_user.id)
@@ -3134,49 +3712,490 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     # User is admin, show admin commands
     admin_help_text = (
-        "👮‍♂️ *Admin Commands* - Baby ❤️\n\n"
-        
-        "⚙️ /settings\n"
-        "→ Group settings customize karo\n"
-        "→ Auto-delete, spam protection, etc.\n\n"
-        
-        "🗑️ /del\n"
-        "→ Reply karke message delete karo\n\n"
-        
-        "🚫 /ban\n"
-        "→ Reply karke user ban karo\n\n"
-        
-        "🔓 /unban <user_id>\n"
-        "→ Reply ya ID se unban karo\n\n"
-        
-        "🔇 /mute <time>\n"
-        "→ Reply karke mute karo (10m, 1h, 1d)\n\n"
-        
-        "🔊 /unmute\n"
-        "→ Reply karke mute hatao\n\n"
-        
-        "👑 /promote\n"
-        "→ Reply karke admin banao\n\n"
-        
-        "👤 /demote\n"
-        "→ Reply karke admin hatao\n\n"
-        
-        "📌 /pin\n"
-        "→ Reply karke message pin karo\n\n"
-        
-        "📍 /unpin\n"
-        "→ Reply karke unpin karo (ya sare pins hatao)\n\n"
-        
-        "⚠️ *Note:* Bot ko admin banana zaruri hai!\n"
-        "Admins ko ban/mute nahi kar sakte 😊"
+        "????? *Admin Commands* - Baby\n\n"
+        "?? /settings\n"
+        "? Group settings customize karo\n\n"
+        "??? /del\n"
+        "? Reply karke message delete karo\n\n"
+        "?? /ban\n"
+        "? Reply karke user ban karo\n\n"
+        "?? /unban <user_id>\n"
+        "? Reply ya ID se unban karo\n\n"
+        "?? /warn <reason>\n"
+        "? Reply karke warning do\n\n"
+        "?? /warnings [reply/user_id]\n"
+        "? Warning count dekho\n\n"
+        "?? /resetwarn [reply/user_id]\n"
+        "? Warnings reset karo\n\n"
+        "?? /mute <time>\n"
+        "? Reply karke mute karo (10m, 1h, 1d)\n\n"
+        "?? /unmute\n"
+        "? Reply karke mute hatao\n\n"
+        "?? /promote\n"
+        "? Reply karke admin banao\n\n"
+        "?? /demote\n"
+        "? Reply karke admin hatao\n\n"
+        "?? /pin\n"
+        "? Reply karke message pin karo\n\n"
+        "?? /unpin\n"
+        "? Reply karke unpin karo\n\n"
+        "Note: Bot ko admin banana zaruri hai."
     )
-    
     await update.effective_message.reply_text(
         admin_help_text,
         parse_mode=ParseMode.MARKDOWN
     )
     
     logger.info(f"Admin help shown to {update.effective_user.first_name}")
+
+
+# ========================= ANALYTICS & STATS COMMANDS ========================= #
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /stats command - Show user and group analytics (admin only)"""
+    user_id = update.effective_user.id
+    
+    # Check if user is admin
+    if user_id != ADMIN_ID:
+        await update.effective_message.reply_text(
+            "🔐 Oops! Sirf admin (bot ka owner) is command use kar sakte hain. 😅"
+        )
+        return
+    
+    # Calculate statistics
+    total_users = len(USERS_DATABASE)
+    active_users = len(REGISTERED_USERS - OPTED_OUT_USERS)
+    opted_out = len(OPTED_OUT_USERS & REGISTERED_USERS)
+    total_groups = len(GROUPS_DATABASE)
+    
+    # Find most active users
+    users_by_activity = sorted(
+        USERS_DATABASE.items(),
+        key=lambda x: x[1].get('last_seen', 0),
+        reverse=True
+    )
+    top_active_users = users_by_activity[:5]
+    
+    # Find newest users
+    users_by_join = sorted(
+        USERS_DATABASE.items(),
+        key=lambda x: x[1].get('join_date', 0),
+        reverse=True
+    )
+    newest_users = users_by_join[:5]
+    
+    # Group stats
+    groups_by_activity = sorted(
+        GROUPS_DATABASE.items(),
+        key=lambda x: x[1].get('last_active', 0),
+        reverse=True
+    )
+    most_active_groups = groups_by_activity[:5]
+    
+    # Calculate dates
+    current_time = time.time()
+    
+    # Build stats message
+    stats_text = (
+        "📊 **BOT ANALYTICS** 📊\n"
+        "=" * 40 + "\n\n"
+        
+        "👥 **USER STATISTICS**\n"
+        f"Total Registered: {total_users}\n"
+        f"Active (Receiving Broadcasts): {active_users}\n"
+        f"Opted Out (/stop): {opted_out}\n"
+        f"Blocked/Deactivated: {total_users - active_users - opted_out}\n\n"
+        
+        "👥 **MOST ACTIVE USERS** (Last Seen)\n"
+    )
+    
+    for idx, (uid, user_info) in enumerate(top_active_users, 1):
+        name = user_info.get('first_name', 'Unknown')
+        last_seen = user_info.get('last_seen', 0)
+        hours_ago = int((current_time - last_seen) / 3600)
+        
+        if hours_ago < 1:
+            time_str = "few mins ago"
+        elif hours_ago < 24:
+            time_str = f"{hours_ago}h ago"
+        else:
+            days_ago = hours_ago // 24
+            time_str = f"{days_ago}d ago"
+        
+        stats_text += f"{idx}. {name} - {time_str}\n"
+    
+    # Newest users
+    stats_text += "\n👤 **NEWEST USERS** (Joined)\n"
+    for idx, (uid, user_info) in enumerate(newest_users, 1):
+        name = user_info.get('first_name', 'Unknown')
+        join_date = user_info.get('join_date', 0)
+        hours_ago = int((current_time - join_date) / 3600)
+        
+        if hours_ago < 1:
+            time_str = "just now"
+        elif hours_ago < 24:
+            time_str = f"{hours_ago}h ago"
+        else:
+            days_ago = hours_ago // 24
+            time_str = f"{days_ago}d ago"
+        
+        stats_text += f"{idx}. {name} - {time_str}\n"
+    
+    # Group stats
+    stats_text += (
+        f"\n👥 **GROUP STATISTICS**\n"
+        f"Total Groups: {total_groups}\n\n"
+        f"🏆 **MOST ACTIVE GROUPS** (Last Active)\n"
+    )
+    
+    for idx, (gid, group_info) in enumerate(most_active_groups, 1):
+        title = group_info.get('title', 'Unknown')
+        members = len(group_info.get('members', {}))
+        last_active = group_info.get('last_active', 0)
+        hours_ago = int((current_time - last_active) / 3600)
+        
+        if hours_ago < 1:
+            time_str = "few mins ago"
+        elif hours_ago < 24:
+            time_str = f"{hours_ago}h ago"
+        else:
+            days_ago = hours_ago // 24
+            time_str = f"{days_ago}d ago"
+        
+        stats_text += f"{idx}. {title} ({members} members) - {time_str}\n"
+    
+    stats_text += "\n" + "=" * 40 + "\n"
+    
+    await update.effective_message.reply_text(stats_text, parse_mode=ParseMode.MARKDOWN)
+    logger.info(f"Stats shown to admin {update.effective_user.first_name}")
+
+
+async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /users command - Show detailed user list (admin only)"""
+    user_id = update.effective_user.id
+    
+    # Check if user is admin
+    if user_id != ADMIN_ID:
+        await update.effective_message.reply_text(
+            "🔐 Oops! Sirf admin hi user list dekh sakte hain. 😅"
+        )
+        return
+    
+    total_users = len(USERS_DATABASE)
+    
+    if total_users == 0:
+        await update.effective_message.reply_text(
+            "❌ Koi bhi user nahi hai abhi! 😅"
+        )
+        return
+    
+    # Sort users by join date (newest first)
+    users_by_join = sorted(
+        USERS_DATABASE.items(),
+        key=lambda x: x[1].get('join_date', 0),
+        reverse=True
+    )
+    
+    current_time = time.time()
+    users_text = f"👥 **ALL USERS** ({total_users} Total)\n" + "=" * 50 + "\n\n"
+    
+    for idx, (uid, user_info) in enumerate(users_by_join, 1):
+        name = user_info.get('first_name', 'Unknown')
+        username = user_info.get('username', 'N/A')
+        join_date = user_info.get('join_date', 0)
+        last_seen = user_info.get('last_seen', 0)
+        
+        # Format dates
+        days_since_join = int((current_time - join_date) / 86400)
+        hours_since_seen = int((current_time - last_seen) / 3600)
+        
+        if hours_since_seen < 1:
+            last_seen_str = "just now"
+        elif hours_since_seen < 24:
+            last_seen_str = f"{hours_since_seen}h ago"
+        else:
+            days_since_seen = hours_since_seen // 24
+            last_seen_str = f"{days_since_seen}d ago"
+        
+        opted_out = "🔒 (Opted-out)" if uid in OPTED_OUT_USERS else ""
+        
+        users_text += (
+            f"{idx}. **{name}** {opted_out}\n"
+            f"   ID: {uid}\n"
+            f"   Username: @{username}\n"
+            f"   Joined: {days_since_join}d ago\n"
+            f"   Last Seen: {last_seen_str}\n\n"
+        )
+        
+        # Split into messages every 20 users
+        if idx % 20 == 0:
+            await update.effective_message.reply_text(users_text, parse_mode=ParseMode.MARKDOWN)
+            users_text = ""
+    
+    if users_text:
+        await update.effective_message.reply_text(users_text, parse_mode=ParseMode.MARKDOWN)
+    
+    logger.info(f"User list shown to admin {update.effective_user.first_name}")
+
+
+async def groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /groups command - Show detailed group list (admin only)"""
+    user_id = update.effective_user.id
+    
+    # Check if user is admin
+    if user_id != ADMIN_ID:
+        await update.effective_message.reply_text(
+            "🔐 Oops! Sirf admin hi group list dekh sakte hain. 😅"
+        )
+        return
+    
+    total_groups = len(GROUPS_DATABASE)
+    
+    if total_groups == 0:
+        await update.effective_message.reply_text(
+            "❌ Koi bhi group nahi hai abhi! 😅"
+        )
+        return
+    
+    # Sort groups by last active (most active first)
+    groups_by_activity = sorted(
+        GROUPS_DATABASE.items(),
+        key=lambda x: x[1].get('last_active', 0),
+        reverse=True
+    )
+    
+    current_time = time.time()
+    groups_text = f"👥 **ALL GROUPS** ({total_groups} Total)\n" + "=" * 50 + "\n\n"
+    
+    total_members = 0
+    
+    for idx, (gid, group_info) in enumerate(groups_by_activity, 1):
+        title = group_info.get('title', 'Unknown')
+        group_type = group_info.get('type', 'group')
+        members = len(group_info.get('members', {}))
+        added_date = group_info.get('added_date', 0)
+        last_active = group_info.get('last_active', 0)
+        
+        total_members += members
+        
+        # Format dates
+        days_since_added = int((current_time - added_date) / 86400)
+        hours_since_active = int((current_time - last_active) / 3600)
+        
+        if hours_since_active < 1:
+            active_str = "active now"
+        elif hours_since_active < 24:
+            active_str = f"{hours_since_active}h ago"
+        else:
+            days_since_active = hours_since_active // 24
+            active_str = f"{days_since_active}d ago"
+        
+        groups_text += (
+            f"{idx}. **{title}**\n"
+            f"   ID: {gid}\n"
+            f"   Type: {group_type}\n"
+            f"   Members: {members}\n"
+            f"   Added: {days_since_added}d ago\n"
+            f"   Last Active: {active_str}\n\n"
+        )
+        
+        # Split into messages every 15 groups
+        if idx % 15 == 0:
+            await update.effective_message.reply_text(groups_text, parse_mode=ParseMode.MARKDOWN)
+            groups_text = ""
+    
+    if groups_text:
+        await update.effective_message.reply_text(groups_text, parse_mode=ParseMode.MARKDOWN)
+    
+    # Summary
+    summary = (
+        f"\n" + "=" * 50 + "\n"
+        f"📊 **SUMMARY**\n"
+        f"Total Groups: {total_groups}\n"
+        f"Total Members (across groups): {total_members}\n"
+        f"Avg Members per Group: {total_members // max(1, total_groups)}"
+    )
+    await update.effective_message.reply_text(summary, parse_mode=ParseMode.MARKDOWN)
+    
+    logger.info(f"Group list shown to admin {update.effective_user.first_name}")
+
+
+# ========================= OWNER DASHBOARD & MUSIC BROADCAST ========================= #
+
+def _format_age(ts: Optional[float]) -> str:
+    if not ts:
+        return "unknown"
+    diff = int(time.time() - ts)
+    if diff < 60:
+        return f"{diff}s ago"
+    if diff < 3600:
+        return f"{diff // 60}m ago"
+    if diff < 86400:
+        return f"{diff // 3600}h ago"
+    return f"{diff // 86400}d ago"
+
+
+async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner dashboard: sqlite overview + recent activity."""
+    if update.effective_user.id != ADMIN_ID:
+        await update.effective_message.reply_text("Sirf owner dashboard dekh sakta hai.")
+        return
+
+    overview = BOT_DB.get_overview()
+    recent = BOT_DB.get_recent_activities(8)
+    lines = [
+        "Live Dashboard",
+        "",
+        f"Users: {overview['users']}",
+        f"Groups: {overview['groups']}",
+        f"Active Users (24h): {overview['active_users_24h']}",
+        f"Active Groups (24h): {overview['active_groups_24h']}",
+        f"Events (24h): {overview['activities_24h']}",
+        "",
+        "Recent Activity:",
+    ]
+
+    if not recent:
+        lines.append("No activity yet.")
+    else:
+        for item in recent:
+            lines.append(
+                f"- {item.get('action')} | user={item.get('user_id')} | group={item.get('group_id')} | {_format_age(item.get('ts'))}"
+            )
+
+    await update.effective_message.reply_text("\n".join(lines))
+
+
+async def broadcastsong_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner command: download one song and broadcast to all users + groups."""
+    if update.effective_user.id != ADMIN_ID:
+        await update.effective_message.reply_text("Sirf owner ye command use kar sakta hai.")
+        return
+
+    if not context.args:
+        await update.effective_message.reply_text(
+            "Usage: /broadcastsong <song name>\nExample: /broadcastsong Tum Hi Ho"
+        )
+        return
+
+    query = " ".join(context.args).strip()
+    status = await update.effective_message.reply_text(f"Song fetch kar raha hoon: {query}")
+
+    temp_dir = DOWNLOAD_DIR / "broadcast"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    audio_file: Optional[Path] = None
+    metadata: Dict[str, Any] = {}
+
+    try:
+        result = await asyncio.to_thread(_download_audio_sync, query, temp_dir)
+        if not result:
+            await status.edit_text("Song fetch nahi hua. Dusra query try karo.")
+            BOT_DB.log_activity("broadcast_song_failed", user_id=update.effective_user.id, metadata={"query": query})
+            return
+
+        audio_file, metadata = result
+        valid, reason = _validate_audio_file(audio_file)
+        if not valid:
+            if audio_file and audio_file.exists():
+                audio_file.unlink(missing_ok=True)
+            await status.edit_text(f"Song invalid file ({reason}). Dusra query try karo.")
+            BOT_DB.log_activity("broadcast_song_failed", user_id=update.effective_user.id, metadata={"query": query, "reason": reason})
+            return
+
+        users = list(REGISTERED_USERS - OPTED_OUT_USERS)
+        groups = list(GROUPS_DATABASE.keys())
+        seed_message = None
+        file_id: Optional[str] = None
+
+        with open(audio_file, "rb") as f:
+            seed_message = await context.bot.send_audio(
+                chat_id=update.effective_chat.id,
+                audio=f,
+                title=metadata.get("title", audio_file.stem[:100]),
+                performer=metadata.get("performer", "Unknown Artist"),
+                duration=metadata.get("duration"),
+                caption="Broadcast seed message",
+            )
+        if seed_message and seed_message.audio:
+            file_id = seed_message.audio.file_id
+
+        sent_users = 0
+        sent_groups = 0
+        failed_users = 0
+        failed_groups = 0
+
+        for uid in users:
+            try:
+                if file_id:
+                    await context.bot.send_audio(
+                        chat_id=uid,
+                        audio=file_id,
+                        title=metadata.get("title", audio_file.stem[:100]),
+                        performer=metadata.get("performer", "Unknown Artist"),
+                        duration=metadata.get("duration"),
+                    )
+                else:
+                    with open(audio_file, "rb") as f:
+                        await context.bot.send_audio(
+                            chat_id=uid,
+                            audio=f,
+                            title=metadata.get("title", audio_file.stem[:100]),
+                            performer=metadata.get("performer", "Unknown Artist"),
+                            duration=metadata.get("duration"),
+                        )
+                sent_users += 1
+            except Exception as e:
+                failed_users += 1
+                err = str(e).lower()
+                if "blocked" in err or "deactivated" in err or "chat not found" in err:
+                    _remove_user_everywhere(uid)
+
+        for gid in groups:
+            try:
+                if file_id:
+                    await context.bot.send_audio(
+                        chat_id=gid,
+                        audio=file_id,
+                        title=metadata.get("title", audio_file.stem[:100]),
+                        performer=metadata.get("performer", "Unknown Artist"),
+                        duration=metadata.get("duration"),
+                        caption="Owner music broadcast",
+                    )
+                else:
+                    with open(audio_file, "rb") as f:
+                        await context.bot.send_audio(
+                            chat_id=gid,
+                            audio=f,
+                            title=metadata.get("title", audio_file.stem[:100]),
+                            performer=metadata.get("performer", "Unknown Artist"),
+                            duration=metadata.get("duration"),
+                            caption="Owner music broadcast",
+                        )
+                sent_groups += 1
+            except Exception as e:
+                failed_groups += 1
+                err = str(e).lower()
+                if "kicked" in err or "not a member" in err or "chat not found" in err:
+                    _remove_group_everywhere(gid)
+
+        BOT_DB.log_activity(
+            "broadcast_song_sent",
+            user_id=update.effective_user.id,
+            metadata={
+                "query": query,
+                "title": metadata.get("title"),
+                "users": sent_users,
+                "groups": sent_groups,
+            },
+        )
+        await status.edit_text(
+            f"Broadcast song complete.\nUsers: {sent_users} sent, {failed_users} failed\nGroups: {sent_groups} sent, {failed_groups} failed"
+        )
+
+    finally:
+        if audio_file and audio_file.exists():
+            audio_file.unlink(missing_ok=True)
+        _cleanup_downloads(temp_dir)
 
 
 # ========================= GROUP SETTINGS COMMANDS ========================= #
@@ -3755,6 +4774,45 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 # ========================= MESSAGE HANDLERS ========================= #
 
+async def welcome_new_members_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Rose-style welcome handler for new members."""
+    if not update.message or not update.message.new_chat_members or not update.effective_chat:
+        return
+    if update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        return
+
+    chat = update.effective_chat
+    await _register_group(chat.id, chat)
+
+    if not get_group_setting(chat.id, "welcome_message"):
+        return
+
+    names = []
+    for member in update.message.new_chat_members:
+        names.append(member.first_name or "User")
+        await _register_user(member.id, member.username, member.first_name)
+        await _register_group_member(chat.id, member.id, member.username, member.first_name)
+        BOT_DB.log_activity("member_joined", user_id=member.id, group_id=chat.id)
+        await _send_log_to_channel(
+            context,
+            (
+                "GROUP_MEMBER_JOIN\n"
+                f"Chat: {chat.title or 'Group'}\n"
+                f"Chat ID: {chat.id}\n"
+                f"User: {_safe_user_mention(member.username, member.first_name)}\n"
+                f"User ID: {member.id}\n"
+                f"At: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+            ),
+        )
+
+    welcome_text = (
+        f"Welcome {', '.join(names)}!\n"
+        f"Group: {chat.title or 'Group'}\n"
+        "Use /help for commands and /song <name> for music."
+    )
+    await update.effective_message.reply_text(welcome_text)
+
+
 async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle private chat messages with Gemini AI"""
     # Register user
@@ -3778,6 +4836,17 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
             return
     
     logger.info(f"Private message from {user_name}: {user_message}")
+    BOT_DB.log_activity("private_message", user_id=user_id, metadata={"text": user_message[:200]})
+    await _send_log_to_channel(
+        context,
+        (
+            "PRIVATE_USE\n"
+            f"User: {_safe_user_mention(update.effective_user.username, update.effective_user.first_name)}\n"
+            f"User ID: {user_id}\n"
+            f"Message: {user_message[:300]}\n"
+            f"At: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+        ),
+    )
     
     # Detect language preference from message
     if "english me bolo" in user_message.lower() or "speak in english" in user_message.lower():
@@ -3843,6 +4912,19 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         
         # Register group member
         await _register_group_member(group_id, user_id, username, first_name)
+        BOT_DB.log_activity("group_message", user_id=user_id, group_id=group_id, metadata={"text": message_text[:200]})
+        await _send_log_to_channel(
+            context,
+            (
+                "GROUP_USE\n"
+                f"Chat: {chat_title}\n"
+                f"Chat ID: {group_id}\n"
+                f"User: {_safe_user_mention(username, first_name)}\n"
+                f"User ID: {user_id}\n"
+                f"Message: {message_text[:300]}\n"
+                f"At: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+            ),
+        )
         
         message_text_lower = message_text.lower().strip()
         
@@ -4073,6 +5155,7 @@ def main() -> None:
     application.add_handler(CommandHandler("users", users_command))
     application.add_handler(CommandHandler("groups", groups_command))
     application.add_handler(CommandHandler("members", members_command))
+    application.add_handler(CommandHandler("dashboard", dashboard_command))
     
     # Song download commands
     application.add_handler(CommandHandler("song", song_command))
@@ -4081,6 +5164,8 @@ def main() -> None:
     
     # Broadcast command (admin only)
     application.add_handler(CommandHandler("broadcast", broadcast_command))
+    application.add_handler(CommandHandler("broadcast_now", broadcast_content))
+    application.add_handler(CommandHandler("broadcastsong", broadcastsong_command))
     
     # Tagging commands
     application.add_handler(CommandHandler("all", all_command))
@@ -4130,6 +5215,9 @@ def main() -> None:
     application.add_handler(CommandHandler("del", del_command))
     application.add_handler(CommandHandler("ban", ban_command))
     application.add_handler(CommandHandler("unban", unban_command))
+    application.add_handler(CommandHandler("warn", warn_command))
+    application.add_handler(CommandHandler("warnings", warnings_command))
+    application.add_handler(CommandHandler("resetwarn", resetwarn_command))
     application.add_handler(CommandHandler("mute", mute_command))
     application.add_handler(CommandHandler("unmute", unmute_command))
     application.add_handler(CommandHandler("promote", promote_command))
@@ -4147,6 +5235,13 @@ def main() -> None:
     application.add_handler(ChatMemberHandler(my_chat_member_handler, ChatMemberHandler.MY_CHAT_MEMBER))
     
     # Register message handlers
+    application.add_handler(
+        MessageHandler(
+            filters.StatusUpdate.NEW_CHAT_MEMBERS,
+            welcome_new_members_handler,
+        )
+    )
+
     # Private messages (all text messages in private chat)
     application.add_handler(
         MessageHandler(
@@ -4186,3 +5281,8 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
