@@ -1203,70 +1203,60 @@ Make them smile. Make them feel heard. Have fun with them. â¤ï¸
 """
 
 # Start message
-START_TEXT: Final[str] = """
-*Hey! I'm Baby*
+START_TEXT: Final[str] = (
+    "\U0001F496 *Hey! I'm Baby*\n\n"
+    "Your friendly music + chat companion, always ready to help \U0001F3A7\u2728\n\n"
+    "*What I can do:*\n"
+    "- \U0001F4AC Chat naturally like a friend\n"
+    "- \U0001F3B5 Find and send songs\n"
+    "- \U0001F399\uFE0F Play songs in group voice chat\n"
+    "- \U0001F6E0\uFE0F Help with admin and utility commands\n\n"
+    "Send me a message and let's vibe! \U0001F680"
+)
 
-Your friendly companion, always ready to chat.
-
-*What I can do:*
-- Have real conversations
-- Find and send songs
-- Play music in voice chat groups
-- Help and support
-
-Send me a message and let's talk.
-"""
-
-HELP_TEXT: Final[str] = """
-*Baby Help Guide*
-
-*Basic Commands:*
-/start - Start the bot
-/help - Open this help menu
-
-*Music Commands:*
-/play <name> - In groups: VC play, in private: song file
-/song <name> - Search and send a song
-/download <name> - Same as /song
-/yt <link> - Download from a YouTube link
-
-*Group Commands (Admin):*
-/all <message> - Mention active users
-@all <message> - Quick mention
-/settings - Group settings
-/admin - Admin tools list
-/warn <reason> - Warn replied user
-/warnings [reply/user_id] - Show warns
-/resetwarn [reply/user_id] - Reset warns
-
-*Owner Commands:*
-/broadcast <msg> - Broadcast text
-/broadcast_now - Broadcast replied content
-/broadcastsong <name> - Broadcast a song
-/dashboard - Live analytics
-/channelstats - Send past/present usage report
-/chatid - Show chat/user IDs
-/users - List users
-/groups - List groups
-
-*Voice Chat (VC) Commands:*
-/vplay <name/url> - Play in group voice chat
-/vqueue - Show VC queue
-/vskip - Skip current VC song
-/vstop - Stop VC and clear queue
-/vcguide - Setup and usage guide for VC play
-
-*Notes:*
-- VC streaming requires `API_ID`, `API_HASH`, and `ASSISTANT_SESSION` to be configured.
-- In private chat, music commands send audio files. In groups, use VC commands for live playback.
-- For best results, make bot + assistant admins in VC groups.
-
-*AI Quick Tools (chat trigger):*
-- `translate <text>`
-- `summarize <text>`
-- `calc <expression>`
-- `time`
-"""
+HELP_TEXT: Final[str] = (
+    "\U0001F496 *Baby Help Guide*\n\n"
+    "*\U0001F680 Basic Commands*\n"
+    "/start - Open start menu\n"
+    "/help - Open this help guide\n"
+    "/chatid - Show chat/user IDs\n"
+    "/vcguide - Voice chat setup guide\n\n"
+    "*\U0001F3B5 Music Commands*\n"
+    "/play <name> - In groups: VC play, in private: song file\n"
+    "/song <name> - Search and send a song\n"
+    "/download <name> - Same as /song\n"
+    "/yt <link> - Download from a YouTube link\n"
+    "/vplay <name/url> - Play in group voice chat\n"
+    "/vqueue - Show voice queue\n"
+    "/vskip - Skip current VC song\n"
+    "/vstop - Stop VC and clear queue\n\n"
+    "*\U0001F46E Group Admin Commands*\n"
+    "/all <message> - Mention active users\n"
+    "@all <message> - Quick mention\n"
+    "/settings - Group settings\n"
+    "/admin - Admin tools list\n"
+    "/warn <reason> - Warn replied user\n"
+    "/warnings [reply/user_id] - Show warns\n"
+    "/resetwarn [reply/user_id] - Reset warns\n\n"
+    "*\U0001F4E2 Owner Commands*\n"
+    "/broadcast <msg> - Broadcast text\n"
+    "/broadcast_now - Broadcast replied content\n"
+    "/broadcastsong <name> - Broadcast a song\n"
+    "/dashboard - Live analytics\n"
+    "/channelstats - Send past/present usage report\n"
+    "/users - List users\n"
+    "/groups - List groups\n\n"
+    "*\u2699\uFE0F Voice Chat Requirements*\n"
+    "- VC streaming requires `API_ID`, `API_HASH`, and `ASSISTANT_SESSION` to be configured.\n"
+    "- In private chat, music commands send audio files. In groups, use VC commands for live playback.\n"
+    "- For best results, make bot + assistant admins in VC groups.\n\n"
+    "*\U0001F9E0 AI Quick Tools* (chat trigger)\n"
+    "- `translate <text>`\n"
+    "- `summarize <text>`\n"
+    "- `calc <expression>`\n"
+    "- `time`\n\n"
+    "Need help setting up VC? Use `/vcguide` \U0001F399\uFE0F"
+)
 
 # Windows async fix
 if os.name == "nt":
@@ -1683,16 +1673,16 @@ async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_T
 def _build_start_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
         [
-            InlineKeyboardButton("Chat With Me", callback_data="chat"),
-            InlineKeyboardButton("Add To Group", url=f"https://t.me/{BOT_USERNAME[1:]}?startgroup=true"),
+            InlineKeyboardButton("\U0001F4AC Chat With Me", callback_data="chat"),
+            InlineKeyboardButton("\u2795 Add To Group", url=f"https://t.me/{BOT_USERNAME[1:]}?startgroup=true"),
         ],
         [
-            InlineKeyboardButton("Help", callback_data="help"),
-            InlineKeyboardButton("VC Guide", callback_data="vc_guide"),
+            InlineKeyboardButton("\U0001F4D8 Help", callback_data="help"),
+            InlineKeyboardButton("\U0001F399\uFE0F VC Guide", callback_data="vc_guide"),
         ],
         [
-            InlineKeyboardButton("Channel", url=f"https://t.me/{CHANNEL_USERNAME[1:]}"),
-            InlineKeyboardButton("Group Settings", callback_data="show_settings_info"),
+            InlineKeyboardButton("\U0001F4E2 Channel", url=f"https://t.me/{CHANNEL_USERNAME[1:]}"),
+            InlineKeyboardButton("\u2699\uFE0F Group Settings", callback_data="show_settings_info"),
         ],
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -1736,7 +1726,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     """Handle /help command"""
     await _register_user(update.effective_user.id)
 
-    keyboard = [[InlineKeyboardButton("Back to Start", callback_data="start")]]
+    keyboard = [[InlineKeyboardButton("\U0001F3E0 Back to Start", callback_data="start")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.effective_message.reply_text(
@@ -2286,9 +2276,9 @@ async def play_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     """In groups -> VC play, in private -> send song audio file."""
     if not context.args:
         await update.effective_message.reply_text(
-            "Use: /play <song name>\n"
-            "In groups: plays in voice chat.\n"
-            "In private: sends audio file."
+            "\U0001F3B5 Use: /play <song name>\n"
+            "- In groups: plays in voice chat\n"
+            "- In private: sends audio file"
         )
         return
 
@@ -4408,7 +4398,7 @@ async def channelstats_command(update: Update, context: ContextTypes.DEFAULT_TYP
 async def vcguide_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show VC setup + usage guide."""
     guide_text = (
-        "Voice Chat Play Guide\n\n"
+        "\U0001F399\uFE0F Voice Chat Play Guide\n\n"
         "Setup (one time):\n"
         "1. Add bot and assistant account to group.\n"
         "2. Make both admin.\n"
@@ -4420,7 +4410,8 @@ async def vcguide_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "- /vskip\n"
         "- /vstop\n\n"
         "Shortcut:\n"
-        "- /play <song> in group will auto-use VC play.\n"
+        "- /play <song> in group will auto-use VC play.\n\n"
+        "Tip: If playback fails, check admin rights + active VC first \u2705"
     )
     await update.effective_message.reply_text(guide_text)
 
@@ -5022,14 +5013,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if query.data == "chat":
         await query.edit_message_text(
-            "Let us start.\n\n"
+            "\u2728 Let us start!\n\n"
             "Ask me anything, share your day, or just chat.\n\n"
-            "I am here for you.",
+            "I am here for you \U0001F496",
             parse_mode=ParseMode.MARKDOWN,
         )
 
     elif query.data == "help":
-        keyboard = [[InlineKeyboardButton("Back to Start", callback_data="start")]]
+        keyboard = [[InlineKeyboardButton("\U0001F3E0 Back to Start", callback_data="start")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(
             HELP_TEXT,
@@ -5038,16 +5029,16 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
 
     elif query.data == "vc_guide":
-        keyboard = [[InlineKeyboardButton("Back to Start", callback_data="start")]]
+        keyboard = [[InlineKeyboardButton("\U0001F3E0 Back to Start", callback_data="start")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(
-            "Voice Chat Play Guide\n\n"
+            "\U0001F399\uFE0F Voice Chat Play Guide\n\n"
             "1. Add bot + assistant account in group.\n"
             "2. Give both admin rights (voice chat permissions).\n"
             "3. Start group voice chat.\n"
             "4. Use /vplay <song name>.\n\n"
             "Controls: /vqueue, /vskip, /vstop\n"
-            "Tip: /play <song> in group also starts VC play.",
+            "Tip: /play <song> in group also starts VC play \u2705",
             reply_markup=reply_markup,
         )
 
@@ -5065,7 +5056,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 user_groups.append((group_id, group_data.get('title', 'Unknown Group')))
 
         if not user_groups:
-            keyboard = [[InlineKeyboardButton("Back to Start", callback_data="start")]]
+            keyboard = [[InlineKeyboardButton("\U0001F3E0 Back to Start", callback_data="start")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text(
                 "*Group Settings*\n\n"
@@ -5083,8 +5074,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         else:
             keyboard = []
             for group_id, group_title in user_groups[:10]:
-                keyboard.append([InlineKeyboardButton(f"Settings: {group_title}", callback_data=f"groupsetting_{group_id}")])
-            keyboard.append([InlineKeyboardButton("Back to Start", callback_data="start")])
+                keyboard.append([InlineKeyboardButton(f"\u2699\uFE0F {group_title}", callback_data=f"groupsetting_{group_id}")])
+            keyboard.append([InlineKeyboardButton("\U0001F3E0 Back to Start", callback_data="start")])
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text(
                 "*Group Settings*\n\n"
@@ -5098,7 +5089,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         group_id = int(query.data.split("_")[1])
         group_name = GROUPS_DATABASE.get(group_id, {}).get('title', 'Group')
 
-        keyboard = [[InlineKeyboardButton("Back to Groups", callback_data="show_settings_info")]]
+        keyboard = [[InlineKeyboardButton("\U0001F519 Back to Groups", callback_data="show_settings_info")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await query.edit_message_text(
