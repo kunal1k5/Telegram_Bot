@@ -50,7 +50,8 @@ class VCManager:
                 import yt_dlp
             except Exception as e:
                 raise RuntimeError(
-                    "VC dependencies missing. Install pyrogram, tgcrypto, py-tgcalls, yt-dlp."
+                    "VC dependencies missing. Install pyrogram, tgcrypto, py-tgcalls, yt-dlp. "
+                    f"Import error: {type(e).__name__}: {e}"
                 ) from e
 
             self._assistant = Client(

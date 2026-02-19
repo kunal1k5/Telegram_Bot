@@ -4534,6 +4534,7 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "2. Bot + assistant are admins with voice chat rights.\n"
             "3. A voice chat is started in the group.\n"
             "4. VC_API_ID/VC_API_HASH (or API_ID/API_HASH) + ASSISTANT_SESSION are valid."
+            "\n5. Railway has installed latest requirements and service was redeployed."
         )
         await status_msg.edit_text(f"VC play failed: {err}{troubleshooting}")
 

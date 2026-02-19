@@ -1,8 +1,8 @@
 python-telegram-bot==21.4
 google-genai
 httpx
-yt-dlp
-pyrogram
-tgcrypto
-py-tgcalls
+yt-dlp>=2025.1.0
+pyrogram==2.0.106
+tgcrypto==1.2.5
+py-tgcalls==2.1.0
 telethon
