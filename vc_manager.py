@@ -43,6 +43,7 @@ class VCManager:
         self._auto_tasks: dict[int, asyncio.Task] = {}
         self._play_tokens: dict[int, int] = {}
         self._paused_chats: set[int] = set()
+        self._default_track_seconds = int(os.getenv("VC_DEFAULT_TRACK_SECONDS", "240"))
 
     async def start(self) -> None:
         if self._ready:
@@ -209,11 +210,22 @@ class VCManager:
 
     def _schedule_auto_advance(self, chat_id: int, track: VCTrack, token: int) -> None:
         self._cancel_auto_task(chat_id)
-        if not track.duration or track.duration <= 0:
-            return
+        duration = track.duration if track.duration and track.duration > 0 else self._default_track_seconds
         self._auto_tasks[chat_id] = asyncio.create_task(
-            self._auto_advance_worker(chat_id, token, int(track.duration) + 3)
+            self._auto_advance_worker(chat_id, token, int(duration) + 3)
         )
+
+    def _ensure_auto_advance(self, chat_id: int) -> None:
+        """Ensure auto-advance task exists when queue is waiting."""
+        if chat_id in self._auto_tasks and not self._auto_tasks[chat_id].done():
+            return
+        now_track = self.now_playing.get(chat_id)
+        if not now_track:
+            return
+        if not self.queues.get(chat_id):
+            return
+        token = self._play_tokens.get(chat_id) or self._next_token(chat_id)
+        self._schedule_auto_advance(chat_id, now_track, token)
 
     def _is_url(self, text: str) -> bool:
         return bool(re.match(r"^https?://", text.strip(), re.IGNORECASE))
@@ -499,6 +511,7 @@ class VCManager:
         track = await self.resolve_track(query, requested_by)
         if chat_id in self.now_playing:
             self.queues.setdefault(chat_id, []).append(track)
+            self._ensure_auto_advance(chat_id)
             return "queued", track
 
         await self._play_track(chat_id, track)
@@ -523,6 +536,7 @@ class VCManager:
         )
         if chat_id in self.now_playing:
             self.queues.setdefault(chat_id, []).append(track)
+            self._ensure_auto_advance(chat_id)
             return "queued", track
         await self._play_track(chat_id, track)
         return "playing", track

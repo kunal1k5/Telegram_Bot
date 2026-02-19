@@ -4769,17 +4769,23 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         now_ts = time.time()
         cache_hit = (
             chat_id in VC_ASSISTANT_PRESENT_CACHE
-            and (now_ts - VC_ASSISTANT_PRESENT_CACHE[chat_id]) < 1800
+            and (now_ts - VC_ASSISTANT_PRESENT_CACHE[chat_id]) < 86400
         )
-        assistant_present = cache_hit or await _is_assistant_in_chat_by_bot(
-            context, chat_id, assistant_id
-        )
+        # If we recently confirmed assistant in this group, trust cache and skip re-check/re-invite.
+        assistant_present = cache_hit
+        if not assistant_present and assistant_id:
+            assistant_present = await _is_assistant_in_chat_by_bot(context, chat_id, assistant_id)
         if not assistant_present:
-            # Fallback check from assistant side once before invite flow.
             assistant_present = await vc.is_assistant_in_chat(chat_id)
 
         # Auto-join assistant only if truly missing.
         if not assistant_present:
+            if not assistant_id:
+                await status_msg.edit_text(
+                    "\U0001F6A7 Assistant identity not available from session.\n"
+                    "Please regenerate ASSISTANT_SESSION and redeploy."
+                )
+                return
             if assistant_id:
                 # If assistant was banned in group, try to unban automatically.
                 try:
