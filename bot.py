@@ -4763,19 +4763,19 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 f"Error: {err}"
             ),
         )
-        fallback_markers = [
-            "Could not resolve track",
-            "Could not resolve stream",
-            "Could not resolve audio stream url",
-            "Requested format is not available",
-            "YouTube blocked anonymous extraction",
-            "Sign in to confirm you're not a bot",
-            "Sign in to confirm you’re not a bot",
+        non_fallback_markers = [
+            "vc config missing",
+            "invalid assistant_session",
+            "assistant login failed",
+            "unsupported pytgcalls api",
+            "not enough rights",
+            "administrator",
+            "invite",
         ]
-        if any(marker.lower() in err.lower() for marker in fallback_markers):
+        if not any(marker in err.lower() for marker in non_fallback_markers):
             try:
                 await status_msg.edit_text(
-                    "VC source blocked. Trying fallback: sending audio file in chat..."
+                    "VC stream unavailable. Trying fallback: sending audio file in chat..."
                 )
                 await song_command(update, context)
                 return
