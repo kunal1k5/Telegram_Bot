@@ -85,6 +85,29 @@ class VCManager:
                 pass
             self._ready = False
 
+    async def get_assistant_identity(self) -> tuple[Optional[int], Optional[str]]:
+        await self.start()
+        try:
+            me = await self._assistant.get_me()
+            return getattr(me, "id", None), getattr(me, "username", None)
+        except Exception:
+            return None, None
+
+    async def is_assistant_in_chat(self, chat_id: int) -> bool:
+        await self.start()
+        me_id, _ = await self.get_assistant_identity()
+        if not me_id:
+            return False
+        try:
+            await self._assistant.get_chat_member(chat_id, me_id)
+            return True
+        except Exception:
+            return False
+
+    async def join_chat_via_invite(self, invite_link: str) -> None:
+        await self.start()
+        await self._assistant.join_chat(invite_link)
+
     def _is_url(self, text: str) -> bool:
         return bool(re.match(r"^https?://", text.strip(), re.IGNORECASE))
 

@@ -4436,15 +4436,46 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     try:
         vc = await _get_vc_manager()
+        chat_id = update.effective_chat.id
+
+        # Auto-join assistant if missing in group (best effort).
+        if not await vc.is_assistant_in_chat(chat_id):
+            try:
+                invite = await context.bot.create_chat_invite_link(
+                    chat_id=chat_id,
+                    name="VC Assistant Auto Join",
+                    member_limit=1,
+                    creates_join_request=False,
+                )
+                await vc.join_chat_via_invite(invite.invite_link)
+                await asyncio.sleep(1.5)
+            except Exception as auto_join_error:
+                await status_msg.edit_text(
+                    "VC setup incomplete: I could not auto-add the assistant account.\n\n"
+                    "Required:\n"
+                    "1. Bot must be admin with invite permission.\n"
+                    "2. Assistant account must be allowed in the group.\n"
+                    "3. Then run /vplay again.\n\n"
+                    f"Details: {auto_join_error}"
+                )
+                return
+
+            if not await vc.is_assistant_in_chat(chat_id):
+                await status_msg.edit_text(
+                    "Assistant is still not in this group.\n"
+                    "Please add assistant manually once, then use /vplay again."
+                )
+                return
+
         requested_by = update.effective_user.first_name or "User"
-        mode, track = await vc.enqueue_or_play(update.effective_chat.id, query, requested_by)
+        mode, track = await vc.enqueue_or_play(chat_id, query, requested_by)
 
         if mode == "playing":
             await status_msg.edit_text(
                 f"VC Now Playing\nTitle: {track.title}\nRequested by: {requested_by}\nSource: {track.webpage_url}"
             )
         else:
-            queue_len = len(vc.get_queue(update.effective_chat.id))
+            queue_len = len(vc.get_queue(chat_id))
             await status_msg.edit_text(
                 f"Added to VC queue\nTitle: {track.title}\nPosition: {queue_len}"
             )
@@ -4453,7 +4484,7 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             context,
             (
                 "VC_PLAY\n"
-                f"Chat ID: {update.effective_chat.id}\n"
+                f"Chat ID: {chat_id}\n"
                 f"Query: {query}\n"
                 f"Mode: {mode}\n"
                 f"By: {update.effective_user.id}"
@@ -4466,7 +4497,7 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "1. Assistant account is in this group.\n"
             "2. Bot + assistant are admins with voice chat rights.\n"
             "3. A voice chat is started in the group.\n"
-            "4. API_ID, API_HASH, ASSISTANT_SESSION are valid."
+            "4. VC_API_ID/VC_API_HASH (or API_ID/API_HASH) + ASSISTANT_SESSION are valid."
         )
         await status_msg.edit_text(f"VC play failed: {err}{troubleshooting}")
 
