@@ -81,6 +81,22 @@ class BotDatabase:
                     reason TEXT,
                     ts REAL NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS user_profiles (
+                    user_id INTEGER PRIMARY KEY,
+                    language_pref TEXT NOT NULL DEFAULT 'auto',
+                    persona_notes TEXT,
+                    updated_at REAL NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS chat_memory (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    chat_id INTEGER NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    ts REAL NOT NULL
+                );
                 """
             )
 
@@ -305,3 +321,69 @@ class BotDatabase:
                     "SELECT COUNT(*) AS c FROM activities WHERE ts >= ?", (day_ago,)
                 ).fetchone()["c"],
             }
+
+    def set_user_language(self, user_id: int, language_pref: str) -> None:
+        now = time.time()
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO user_profiles (user_id, language_pref, persona_notes, updated_at)
+                VALUES (?, ?, NULL, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    language_pref=excluded.language_pref,
+                    updated_at=excluded.updated_at
+                """,
+                (user_id, language_pref, now),
+            )
+
+    def get_user_language(self, user_id: int) -> str:
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT language_pref FROM user_profiles WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+        if not row:
+            return "auto"
+        return row["language_pref"] or "auto"
+
+    def add_chat_memory(self, user_id: int, chat_id: int, role: str, content: str) -> None:
+        now = time.time()
+        text = (content or "").strip()
+        if not text:
+            return
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO chat_memory (user_id, chat_id, role, content, ts)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (user_id, chat_id, role, text[:2000], now),
+            )
+            # Keep memory bounded per user+chat.
+            conn.execute(
+                """
+                DELETE FROM chat_memory
+                WHERE id IN (
+                    SELECT id FROM chat_memory
+                    WHERE user_id = ? AND chat_id = ?
+                    ORDER BY id DESC
+                    LIMIT -1 OFFSET 40
+                )
+                """,
+                (user_id, chat_id),
+            )
+
+    def get_chat_memory(self, user_id: int, chat_id: int, limit: int = 12) -> list[dict[str, Any]]:
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT role, content, ts
+                FROM chat_memory
+                WHERE user_id = ? AND chat_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (user_id, chat_id, limit),
+            ).fetchall()
+        # return oldest -> newest for model context
+        return [dict(row) for row in reversed(rows)]
