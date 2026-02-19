@@ -251,31 +251,50 @@ class VCManager:
                 "format": "bestaudio/best",
                 "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
             },
+            {
+                "format": "bestaudio/best",
+                "extractor_args": {"youtube": {"player_client": ["ios", "mweb", "tv"]}},
+            },
             {"format": "best"},
             {},  # Let yt-dlp auto-pick.
         ]
 
         search_target = query if self._is_url(query) else f"ytsearch1:{query}"
         last_error: Optional[Exception] = None
+
+        # Step 1: resolve target URL/title without forcing any format.
+        search_opts = dict(base_opts)
+        try:
+            with self._yt_dlp.YoutubeDL(search_opts) as ydl:
+                info = ydl.extract_info(search_target, download=False)
+        except Exception as e:
+            err = str(e)
+            if "Sign in to confirm you’re not a bot" in err or "Sign in to confirm you're not a bot" in err:
+                raise RuntimeError(
+                    "YouTube blocked anonymous extraction for this track. "
+                    "Set YTDLP_COOKIES (Netscape cookies text) or YTDLP_COOKIE_FILE in Railway vars, then redeploy."
+                ) from e
+            raise RuntimeError(f"Could not resolve track: {e}") from e
+
+        if not info:
+            raise RuntimeError("No track found")
+        if "entries" in info:
+            entries = info.get("entries") or []
+            if not entries:
+                raise RuntimeError("No search result entries")
+            info = entries[0]
+
+        webpage_url = info.get("webpage_url") or info.get("url")
+        title = info.get("title") or "Unknown Title"
+        if not webpage_url:
+            raise RuntimeError("Could not resolve webpage url")
+
+        # Step 2: resolve playable stream URL with format fallbacks.
         for profile in format_profiles:
-            ydl_opts = dict(base_opts)
-            ydl_opts.update(profile)
+            detail_opts = dict(base_opts)
+            detail_opts.update(profile)
             try:
-                with self._yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(search_target, download=False)
-                    if not info:
-                        raise RuntimeError("No track found")
-                    if "entries" in info:
-                        entries = info.get("entries") or []
-                        if not entries:
-                            raise RuntimeError("No search result entries")
-                        info = entries[0]
-
-                    webpage_url = info.get("webpage_url") or info.get("url")
-                    title = info.get("title") or "Unknown Title"
-                    if not webpage_url:
-                        raise RuntimeError("Could not resolve webpage url")
-
+                with self._yt_dlp.YoutubeDL(detail_opts) as ydl:
                     detailed = ydl.extract_info(webpage_url, download=False)
                     if not detailed:
                         raise RuntimeError("Could not resolve stream info")
@@ -297,9 +316,6 @@ class VCManager:
                         "Set YTDLP_COOKIES (Netscape cookies text) or YTDLP_COOKIE_FILE in Railway vars, then redeploy."
                     ) from e
                 last_error = e
-                # Keep trying next format profile for format-specific failures.
-                if "Requested format is not available" in err:
-                    continue
                 continue
 
         if last_error:
