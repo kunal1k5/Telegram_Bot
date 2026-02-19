@@ -10,7 +10,9 @@ import shutil
 import re
 import ast
 import operator
+import sys
 from pathlib import Path
+from importlib.metadata import PackageNotFoundError, version
 from typing import Final, Dict, List, Tuple, Optional, Set, Any
 
 # Initialize random seed for better randomization
@@ -4540,6 +4542,73 @@ async def channelstats_command(update: Update, context: ContextTypes.DEFAULT_TYP
     await update.effective_message.reply_text(report)
 
 
+def _pkg_version(name: str) -> str:
+    """Return installed package version or not-installed marker."""
+    try:
+        return version(name)
+    except PackageNotFoundError:
+        return "not-installed"
+    except Exception:
+        return "unknown"
+
+
+def _git_commit_short() -> str:
+    """Best-effort short commit hash for runtime build tracing."""
+    try:
+        out = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+            text=True,
+        ).strip()
+        return out or "unknown"
+    except Exception:
+        return "unknown"
+
+
+async def buildinfo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show runtime build + dependency info to verify deployed version."""
+    await _register_user_from_update(update)
+    if not update.effective_user or update.effective_user.id != ADMIN_ID:
+        await update.effective_message.reply_text("Only owner can use this command.")
+        return
+
+    pytgcalls_mode = "unknown"
+    try:
+        from pytgcalls import PyTgCalls
+
+        has_play = hasattr(PyTgCalls, "play")
+        has_join = hasattr(PyTgCalls, "join_group_call")
+        if has_play:
+            pytgcalls_mode = "new-api(play)"
+        elif has_join:
+            pytgcalls_mode = "old-api(join_group_call)"
+        else:
+            pytgcalls_mode = "unsupported-api"
+    except Exception as e:
+        pytgcalls_mode = f"import-error: {type(e).__name__}"
+
+    lines = [
+        "Build Info",
+        f"Commit: {_git_commit_short()}",
+        f"Python: {sys.version.split()[0]}",
+        f"Working Dir: {Path.cwd()}",
+        "",
+        "Package Versions",
+        f"python-telegram-bot: {_pkg_version('python-telegram-bot')}",
+        f"pyrogram: {_pkg_version('pyrogram')}",
+        f"tgcrypto: {_pkg_version('tgcrypto')}",
+        f"py-tgcalls: {_pkg_version('py-tgcalls')}",
+        f"yt-dlp: {_pkg_version('yt-dlp')}",
+        "",
+        f"PyTgCalls API Mode: {pytgcalls_mode}",
+        f"VC_API_ID set: {'yes' if VC_API_ID else 'no'}",
+        f"VC_API_HASH set: {'yes' if bool(VC_API_HASH) else 'no'}",
+        f"ASSISTANT_SESSION set: {'yes' if bool(ASSISTANT_SESSION) else 'no'}",
+    ]
+    await update.effective_message.reply_text("\n".join(lines))
+
+
 async def vcguide_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show VC setup + usage guide."""
     guide_text = (
@@ -6076,6 +6145,7 @@ def _default_bot_commands() -> list[BotCommand]:
         BotCommand("broadcastsong", "Broadcast song (owner)"),
         BotCommand("dashboard", "Show analytics (owner)"),
         BotCommand("channelstats", "Send usage report (owner)"),
+        BotCommand("buildinfo", "Show runtime build info (owner)"),
         BotCommand("users", "List users (owner)"),
         BotCommand("groups", "List groups (owner)"),
         BotCommand("members", "Show group members"),
@@ -6200,6 +6270,7 @@ def main() -> None:
     application.add_handler(CommandHandler("members", members_command))
     application.add_handler(CommandHandler("dashboard", dashboard_command))
     application.add_handler(CommandHandler("channelstats", channelstats_command))
+    application.add_handler(CommandHandler("buildinfo", buildinfo_command))
     application.add_handler(CommandHandler("chatid", chatid_command))
     
     # Song download commands
