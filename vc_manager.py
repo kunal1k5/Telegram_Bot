@@ -39,6 +39,8 @@ class VCManager:
         self.queues: dict[int, list[VCTrack]] = {}
         self.now_playing: dict[int, VCTrack] = {}
         self.active_calls: set[int] = set()
+        self._auto_tasks: dict[int, asyncio.Task] = {}
+        self._play_tokens: dict[int, int] = {}
 
     async def start(self) -> None:
         if self._ready:
@@ -140,6 +142,11 @@ class VCManager:
                 except Exception:
                     pass
                 self._cookie_file_path = None
+            for task in list(self._auto_tasks.values()):
+                if task and not task.done():
+                    task.cancel()
+            self._auto_tasks.clear()
+            self._play_tokens.clear()
             self._ready = False
 
     async def get_assistant_identity(self) -> tuple[Optional[int], Optional[str]]:
@@ -174,6 +181,37 @@ class VCManager:
                 os.remove(track.stream_url)
         except Exception:
             pass
+
+    def _cancel_auto_task(self, chat_id: int) -> None:
+        task = self._auto_tasks.pop(chat_id, None)
+        if task and not task.done():
+            task.cancel()
+
+    def _next_token(self, chat_id: int) -> int:
+        token = self._play_tokens.get(chat_id, 0) + 1
+        self._play_tokens[chat_id] = token
+        return token
+
+    async def _auto_advance_worker(self, chat_id: int, token: int, delay: int) -> None:
+        try:
+            await asyncio.sleep(delay)
+            if self._play_tokens.get(chat_id) != token:
+                return
+            if not self.queues.get(chat_id):
+                return
+            await self.skip(chat_id)
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            return
+
+    def _schedule_auto_advance(self, chat_id: int, track: VCTrack, token: int) -> None:
+        self._cancel_auto_task(chat_id)
+        if not track.duration or track.duration <= 0:
+            return
+        self._auto_tasks[chat_id] = asyncio.create_task(
+            self._auto_advance_worker(chat_id, token, int(track.duration) + 3)
+        )
 
     def _is_url(self, text: str) -> bool:
         return bool(re.match(r"^https?://", text.strip(), re.IGNORECASE))
@@ -406,6 +444,7 @@ class VCManager:
 
     async def _play_track(self, chat_id: int, track: VCTrack) -> None:
         await self.start()
+        token = self._next_token(chat_id)
 
         # New py-tgcalls API (2.x): play(chat_id, stream_url) handles start + replace.
         if self._supports_play_api:
@@ -415,6 +454,7 @@ class VCManager:
                 raise RuntimeError(f"Could not start stream: {e}") from e
             self.active_calls.add(chat_id)
             self.now_playing[chat_id] = track
+            self._schedule_auto_advance(chat_id, track, token)
             return
 
         # Old API fallback.
@@ -427,6 +467,7 @@ class VCManager:
                 await self._calls.join_group_call(chat_id, stream)
                 self.active_calls.add(chat_id)
                 self.now_playing[chat_id] = track
+                self._schedule_auto_advance(chat_id, track, token)
                 return
             except Exception:
                 pass
@@ -441,6 +482,7 @@ class VCManager:
 
         self.active_calls.add(chat_id)
         self.now_playing[chat_id] = track
+        self._schedule_auto_advance(chat_id, track, token)
 
     async def enqueue_or_play(self, chat_id: int, query: str, requested_by: str) -> tuple[str, VCTrack]:
         track = await self.resolve_track(query, requested_by)
@@ -475,6 +517,7 @@ class VCManager:
 
     async def skip(self, chat_id: int) -> Optional[VCTrack]:
         old_track = self.now_playing.get(chat_id)
+        self._cancel_auto_task(chat_id)
         queue = self.queues.get(chat_id, [])
         if not queue:
             self.now_playing.pop(chat_id, None)
@@ -489,6 +532,8 @@ class VCManager:
     async def stop_chat(self, chat_id: int) -> None:
         old_track = self.now_playing.get(chat_id)
         queued_tracks = self.queues.get(chat_id, [])
+        self._cancel_auto_task(chat_id)
+        self._play_tokens.pop(chat_id, None)
         if not self._ready:
             self._cleanup_track_file(old_track)
             for item in queued_tracks:
