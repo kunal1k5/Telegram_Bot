@@ -2,6 +2,7 @@ import asyncio
 import importlib
 import re
 from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Optional
 
 
@@ -26,6 +27,8 @@ class VCManager:
         self._assistant: Any = None
         self._calls: Any = None
         self._audio_piped_cls: Any = None
+        self._supports_play_api = False
+        self._supports_join_api = False
         self._yt_dlp: Any = None
 
         self.queues: dict[int, list[VCTrack]] = {}
@@ -48,7 +51,36 @@ class VCManager:
                 from pyrogram import Client
                 from pytgcalls import PyTgCalls
                 import yt_dlp
+            except Exception as e:
+                pkg_bits: list[str] = []
+                for pkg_name in ("py-tgcalls", "pytgcalls"):
+                    try:
+                        pkg_bits.append(f"{pkg_name}={version(pkg_name)}")
+                    except PackageNotFoundError:
+                        pkg_bits.append(f"{pkg_name}=not-installed")
+                raise RuntimeError(
+                    "VC dependencies missing. Install pyrogram, tgcrypto, py-tgcalls, yt-dlp. "
+                    f"Import error: {type(e).__name__}: {e}. "
+                    f"Detected packages: {', '.join(pkg_bits)}"
+                ) from e
 
+            self._assistant = Client(
+                name="animx_vc_assistant",
+                api_id=self.api_id,
+                api_hash=self.api_hash,
+                session_string=self.assistant_session,
+                no_updates=True,
+            )
+            await self._assistant.start()
+
+            self._calls = PyTgCalls(self._assistant)
+            await self._calls.start()
+
+            self._supports_play_api = hasattr(self._calls, "play")
+            self._supports_join_api = hasattr(self._calls, "join_group_call")
+
+            # Old API compatibility: join_group_call(chat_id, AudioPiped(url))
+            if self._supports_join_api and not self._supports_play_api:
                 audio_piped_cls = None
                 audio_import_errors: list[str] = []
                 for module_name, class_name in [
@@ -65,28 +97,11 @@ class VCManager:
 
                 if audio_piped_cls is None:
                     raise RuntimeError(
-                        "Could not import AudioPiped from pytgcalls. "
+                        "PyTgCalls old API detected but AudioPiped import failed. "
                         + " | ".join(audio_import_errors)
                     )
-            except Exception as e:
-                raise RuntimeError(
-                    "VC dependencies missing. Install pyrogram, tgcrypto, py-tgcalls, yt-dlp. "
-                    f"Import error: {type(e).__name__}: {e}"
-                ) from e
+                self._audio_piped_cls = audio_piped_cls
 
-            self._assistant = Client(
-                name="animx_vc_assistant",
-                api_id=self.api_id,
-                api_hash=self.api_hash,
-                session_string=self.assistant_session,
-                no_updates=True,
-            )
-            await self._assistant.start()
-
-            self._calls = PyTgCalls(self._assistant)
-            await self._calls.start()
-
-            self._audio_piped_cls = audio_piped_cls
             self._yt_dlp = yt_dlp
             self._ready = True
 
@@ -177,8 +192,22 @@ class VCManager:
 
     async def _play_track(self, chat_id: int, track: VCTrack) -> None:
         await self.start()
-        stream = self._audio_piped_cls(track.stream_url)
 
+        # New py-tgcalls API (2.x): play(chat_id, stream_url) handles start + replace.
+        if self._supports_play_api:
+            try:
+                await self._calls.play(chat_id, track.stream_url)
+            except Exception as e:
+                raise RuntimeError(f"Could not start stream: {e}") from e
+            self.active_calls.add(chat_id)
+            self.now_playing[chat_id] = track
+            return
+
+        # Old API fallback.
+        if not self._supports_join_api or self._audio_piped_cls is None:
+            raise RuntimeError("Unsupported PyTgCalls API detected in this environment.")
+
+        stream = self._audio_piped_cls(track.stream_url)
         if chat_id not in self.active_calls:
             try:
                 await self._calls.join_group_call(chat_id, stream)
@@ -186,10 +215,8 @@ class VCManager:
                 self.now_playing[chat_id] = track
                 return
             except Exception:
-                # If already in call or API variant mismatch, continue fallback.
                 pass
 
-        # fallback stream change methods for compatibility
         try:
             await self._calls.change_stream(chat_id, stream)
         except Exception:

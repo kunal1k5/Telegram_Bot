@@ -97,6 +97,54 @@ class BotDatabase:
                     content TEXT NOT NULL,
                     ts REAL NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS user_connections (
+                    user_id INTEGER PRIMARY KEY,
+                    group_id INTEGER NOT NULL,
+                    connected_at REAL NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS notes (
+                    group_id INTEGER NOT NULL,
+                    note_name TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_by INTEGER,
+                    updated_at REAL NOT NULL,
+                    PRIMARY KEY (group_id, note_name)
+                );
+
+                CREATE TABLE IF NOT EXISTS filters (
+                    group_id INTEGER NOT NULL,
+                    keyword TEXT NOT NULL,
+                    response TEXT NOT NULL,
+                    created_by INTEGER,
+                    updated_at REAL NOT NULL,
+                    PRIMARY KEY (group_id, keyword)
+                );
+
+                CREATE TABLE IF NOT EXISTS federations (
+                    fed_id TEXT PRIMARY KEY,
+                    fed_name TEXT NOT NULL,
+                    owner_id INTEGER NOT NULL,
+                    created_at REAL NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS federation_chats (
+                    fed_id TEXT NOT NULL,
+                    group_id INTEGER NOT NULL,
+                    added_by INTEGER,
+                    joined_at REAL NOT NULL,
+                    PRIMARY KEY (fed_id, group_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS federation_bans (
+                    fed_id TEXT NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    reason TEXT,
+                    banned_by INTEGER,
+                    banned_at REAL NOT NULL,
+                    PRIMARY KEY (fed_id, user_id)
+                );
                 """
             )
 
@@ -387,3 +435,239 @@ class BotDatabase:
             ).fetchall()
         # return oldest -> newest for model context
         return [dict(row) for row in reversed(rows)]
+
+    # -------------------- Connect System -------------------- #
+    def set_connection(self, user_id: int, group_id: int) -> None:
+        now = time.time()
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO user_connections (user_id, group_id, connected_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    group_id=excluded.group_id,
+                    connected_at=excluded.connected_at
+                """,
+                (user_id, group_id, now),
+            )
+
+    def get_connection(self, user_id: int) -> Optional[int]:
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT group_id FROM user_connections WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+        if not row:
+            return None
+        return int(row["group_id"])
+
+    def remove_connection(self, user_id: int) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute("DELETE FROM user_connections WHERE user_id = ?", (user_id,))
+
+    # -------------------- Notes -------------------- #
+    def save_note(self, group_id: int, note_name: str, content: str, created_by: int) -> None:
+        now = time.time()
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO notes (group_id, note_name, content, created_by, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(group_id, note_name) DO UPDATE SET
+                    content=excluded.content,
+                    created_by=excluded.created_by,
+                    updated_at=excluded.updated_at
+                """,
+                (group_id, note_name.lower().strip(), content.strip()[:4000], created_by, now),
+            )
+
+    def get_note(self, group_id: int, note_name: str) -> Optional[dict[str, Any]]:
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT note_name, content, created_by, updated_at
+                FROM notes
+                WHERE group_id = ? AND note_name = ?
+                """,
+                (group_id, note_name.lower().strip()),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_notes(self, group_id: int, limit: int = 200) -> list[dict[str, Any]]:
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT note_name, updated_at
+                FROM notes
+                WHERE group_id = ?
+                ORDER BY note_name ASC
+                LIMIT ?
+                """,
+                (group_id, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def delete_note(self, group_id: int, note_name: str) -> bool:
+        with self._lock, self._connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM notes WHERE group_id = ? AND note_name = ?",
+                (group_id, note_name.lower().strip()),
+            )
+        return cur.rowcount > 0
+
+    # -------------------- Filters -------------------- #
+    def save_filter(self, group_id: int, keyword: str, response: str, created_by: int) -> None:
+        now = time.time()
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO filters (group_id, keyword, response, created_by, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(group_id, keyword) DO UPDATE SET
+                    response=excluded.response,
+                    created_by=excluded.created_by,
+                    updated_at=excluded.updated_at
+                """,
+                (group_id, keyword.lower().strip(), response.strip()[:4000], created_by, now),
+            )
+
+    def get_matching_filter(self, group_id: int, message_text: str) -> Optional[dict[str, Any]]:
+        query_text = (message_text or "").lower().strip()
+        if not query_text:
+            return None
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT keyword, response
+                FROM filters
+                WHERE group_id = ?
+                ORDER BY LENGTH(keyword) DESC
+                """,
+                (group_id,),
+            ).fetchall()
+        for row in rows:
+            kw = (row["keyword"] or "").strip()
+            if kw and kw in query_text:
+                return dict(row)
+        return None
+
+    def list_filters(self, group_id: int, limit: int = 300) -> list[dict[str, Any]]:
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT keyword, updated_at
+                FROM filters
+                WHERE group_id = ?
+                ORDER BY keyword ASC
+                LIMIT ?
+                """,
+                (group_id, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def delete_filter(self, group_id: int, keyword: str) -> bool:
+        with self._lock, self._connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM filters WHERE group_id = ? AND keyword = ?",
+                (group_id, keyword.lower().strip()),
+            )
+        return cur.rowcount > 0
+
+    # -------------------- Federation Scaffold -------------------- #
+    def create_federation(self, fed_id: str, fed_name: str, owner_id: int) -> None:
+        now = time.time()
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO federations (fed_id, fed_name, owner_id, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (fed_id.strip(), fed_name.strip()[:120], owner_id, now),
+            )
+
+    def get_federation(self, fed_id: str) -> Optional[dict[str, Any]]:
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT fed_id, fed_name, owner_id, created_at FROM federations WHERE fed_id = ?",
+                (fed_id.strip(),),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_owner_federations(self, owner_id: int, limit: int = 50) -> list[dict[str, Any]]:
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT fed_id, fed_name, created_at
+                FROM federations
+                WHERE owner_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (owner_id, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def join_federation_chat(self, fed_id: str, group_id: int, added_by: int) -> None:
+        now = time.time()
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO federation_chats (fed_id, group_id, added_by, joined_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(fed_id, group_id) DO UPDATE SET
+                    added_by=excluded.added_by,
+                    joined_at=excluded.joined_at
+                """,
+                (fed_id.strip(), group_id, added_by, now),
+            )
+
+    def leave_federation_chat(self, group_id: int) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "DELETE FROM federation_chats WHERE group_id = ?",
+                (group_id,),
+            )
+
+    def get_group_federation(self, group_id: int) -> Optional[dict[str, Any]]:
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT fc.fed_id, f.fed_name, f.owner_id
+                FROM federation_chats fc
+                JOIN federations f ON f.fed_id = fc.fed_id
+                WHERE fc.group_id = ?
+                """,
+                (group_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def count_federation_chats(self, fed_id: str) -> int:
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS c FROM federation_chats WHERE fed_id = ?",
+                (fed_id.strip(),),
+            ).fetchone()
+        return int(row["c"]) if row else 0
+
+    def fed_ban(self, fed_id: str, user_id: int, banned_by: int, reason: str) -> None:
+        now = time.time()
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO federation_bans (fed_id, user_id, reason, banned_by, banned_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(fed_id, user_id) DO UPDATE SET
+                    reason=excluded.reason,
+                    banned_by=excluded.banned_by,
+                    banned_at=excluded.banned_at
+                """,
+                (fed_id.strip(), user_id, reason.strip()[:500], banned_by, now),
+            )
+
+    def fed_unban(self, fed_id: str, user_id: int) -> bool:
+        with self._lock, self._connect() as conn:
+            cur = conn.execute(
+                "DELETE FROM federation_bans WHERE fed_id = ? AND user_id = ?",
+                (fed_id.strip(), user_id),
+            )
+        return cur.rowcount > 0

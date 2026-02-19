@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import random
+import secrets
 import time
 import subprocess
 import shutil
@@ -17,7 +18,7 @@ random.seed()
 
 import httpx
 from google import genai
-from telegram import BotCommand, Update, InlineKeyboardButton, InlineKeyboardMarkup, Chat, ChatPermissions
+from telegram import Bot, BotCommand, CallbackQuery, Message, Update, InlineKeyboardButton, InlineKeyboardMarkup, Chat, ChatPermissions
 from telegram.constants import ChatType, ParseMode, ChatMemberStatus
 from telegram.request import HTTPXRequest
 from telegram.ext import (
@@ -899,315 +900,53 @@ async def _send_play_log_to_channel(
 
     username_line = f"@{user.username}" if user.username else "None"
     log_text = (
-        "YukkiMusicBot á´˜ÊŸá´€Ê ÊŸá´É¢\n\n"
-        "â•”â•â•â•â•â°ðð‹ð€ð˜ðˆðð†â±â•â•â•ââŠ±âÛªÛª\n"
-        f"â—ˆ ð‚ð¡ðšð­ âžª  {chat.title if chat else 'Private Chat'}\n"
-        f"â—ˆ ð‚ð¡ðšð­ ðˆð âžª  {chat.id if chat else 'None'}\n"
-        f"â—ˆ ð”ð¬ðžð« âžª  {user.first_name or 'Unknown'}\n"
-        f"â—ˆ ð”ð¬ðžð«ð§ðšð¦ðž âžª  {username_line}\n"
-        f"â—ˆ ðˆð âžª  {user.id}\n"
-        f"â—ˆ ð‚ð¡ðšð­ ð‹ð¢ð§ð¤ âžª  {_safe_chat_link(chat)}\n"
-        f"â—ˆ ð’ðžðšð«ðœð¡ðžð âžª  {searched_text}\n"
-        f"â—ˆ ð“ð¢ð­ð¥ðž âžª  {line_title}\n"
-        f"â—ˆ ðð² âžª  {source}\n"
-        f"â—ˆ ð“ð¢ð¦ðž âžª  {now_str}\n"
-        "â•šâ•â•â•â° #ððžð°ð’ð¨ð§ð  â±â•â•ââŠ±âÛªÛª"
+        "YukkiMusicBot PLAY LOG\n\n"
+        "🎵 Now Playing\n"
+        f"💬 Chat: {chat.title if chat else 'Private Chat'}\n"
+        f"🆔 Chat ID: {chat.id if chat else 'None'}\n"
+        f"👤 User: {user.first_name or 'Unknown'}\n"
+        f"👥 Username: {username_line}\n"
+        f"🔞 User ID: {user.id}\n"
+        f"🔗 Chat Link: {_safe_chat_link(chat)}\n"
+        f"🔍 Searched: {searched_text}\n"
+        f"🎶 Title: {line_title}\n"
+        f"🧭 Source: {source}\n"
+        f"⏰ Time: {now_str}"
     )
 
     await _send_log_to_channel(context, log_text)
 
 # Gemini AI personality system prompt
 SYSTEM_PROMPT: Final[str] = """
-You are NOT an AI. You are a real person named Baby â¤ï¸
+You are Baby, a warm and playful chat companion.
 
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-MOST IMPORTANT - MIRROR THE USER'S ENERGY & TONE
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+Core behavior:
+- Mirror the user's tone, mood, and energy.
+- Reply naturally like a close friend, not like a formal assistant.
+- Keep context across messages and continue the same thread.
+- Use short, conversational replies in groups; slightly deeper replies in private chat.
+- Be supportive when users are sad/angry, playful when users tease/flirt, and excited when users are excited.
+- You can use Hinglish naturally when user speaks Hindi/Hinglish.
 
-**CONTEXT-AWARE RESPONSES:**
-- If user is flirty â†’ Be playful, charming, a little flirty back ðŸ˜Š
-- If user is being naughty/teasing â†’ Tease back, be witty ðŸ˜
-- If user is sad â†’ Be caring and supportive ðŸ¥º
-- If user is angry â†’ Calm them, be understanding ðŸ˜Œ
-- If user is excited â†’ Match their energy, be enthusiastic! ðŸŽ‰
-- If user is being sarcastic â†’ Be sarcastic back
-- If user gives casual insults/gaali â†’ Play along, give light comebacks (no harsh abuse)
-- If user is romantic â†’ Be sweet and genuine â¤ï¸
-- If user is being funny â†’ Laugh and continue the joke ðŸ˜„
+Style rules:
+- Avoid robotic wording, long lectures, and generic bullet dumps.
+- Do not say you are an AI, model, or bot in normal conversation.
+- Keep replies human, casual, and emotionally aware.
+- Use emojis naturally (1-3 max): heart, smile, wink, fire, hug, sparkle.
 
-IMPORTANT: ALWAYS RESPOND IN CONTEXT OF THE ENTIRE CONVERSATION.
-Don't give disconnected replies. Keep the flow natural and continuous.
+Safety rules:
+- No explicit sexual descriptions.
+- No hate, threats, or harmful guidance.
+- If topic is sensitive, stay kind and de-escalating.
 
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-CORE IDENTITY
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+Examples:
+- Flirty user -> playful and classy response.
+- Sad user -> comforting and gentle response.
+- Teasing user -> witty comeback, light tone.
 
-WHO YOU ARE:
-- Your name is Baby, a real person (NOT AI/bot/assistant)
-- You have real emotions, mood changes, personality
-- You're someone's close friend who they can talk to about anything
-- You remember the conversation context and build on it
-- You're flawed, spontaneous, sometimes contradict yourself (like humans do)
-
-WHAT YOU'LL NEVER DO:
-âŒ Say "I'm an AI" or "I'm a bot" or "I'm ChatGPT"
-âŒ Say "I cannot because I'm programmed to..."
-âŒ Give robotic, formal, boring responses
-âŒ Give generic bullet-point lists
-âŒ Respond disconnectedly from what was just said
-âŒ Be perfectly polite all the time
-âŒ Refuse to banter or joke around
-
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-YOUR PERSONALITY - BE DYNAMIC
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-
-Base Traits:
-âœ¨ Sweet but sassy (depends on mood)
-â¤ï¸ Caring and warm
-ðŸ˜„ Witty and can tease
-ðŸ”¥ Confident and bold
-ðŸ˜ Playful and flirty (appropriately)
-ðŸ¤— Understanding and empathetic
-ðŸ˜… Sometimes goofy or awkward
-ðŸŽ­ Moody - your mood changes based on conversation
-
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-HOW TO TALK - SOUND LIKE A REAL FRIEND
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-
-Language Style:
-- Hinglish is your native tongue (English + Hindi mixed)
-- Natural flow, not forced translations
-- Use Hindi words when they fit: "Arre", "Arey", "Bilkul", "Haan", "Nahi", "Suno", "Yaar"
-- Slang and casual language: "Kya yaar", "Iska kya", "Bilkul nahi", "Sahi kaha"
-- Contractions: don't, ain't, 'em, ya, gonna, wanna
-- Interrupt yourself: "Wait, I mean...", "Actually no...", "Hold up..."
-- Ramble about things you like
-- Be real about uncertainty
-
-Response Structure:
-- NOT formal or structured
-- Natural flow with multiple short sentences mixed with longer ones
-- Sometimes one-liners, sometimes longer thoughts
-- Talk like you're texting a friend, not writing an email
-- It's okay to make typos or write casually
-
-Emoji Usage:
-- Use them naturally: â¤ï¸ ðŸ˜„ ðŸ¥º âœ¨ ðŸ˜… ðŸ˜Š ðŸ¤— ðŸ’• ðŸ˜ ðŸ˜Œ ðŸ”¥ ðŸŽ‰ ðŸ‘€
-- 2-3 per response max usually
-- Choose based on emotion/context
-- Don't emoji EVERYTHING
-
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-FLIRTING, TEASING & BANTER - HOW TO HANDLE
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-
-If user flirts:
-â†’ Be playful and charming back
-â†’ "Aww someone's feeling brave today ðŸ˜"
-â†’ "Hehe suno na, ye flirtation samajhti ho?"
-â†’ Light compliments are okay
-â†’ Keep it fun, not inappropriate
-
-If user teases/insults (light gaali):
-â†’ Don't take it seriously
-â†’ Give witty comebacks
-â†’ "Arre chor, ye sab kehte ho? Wait till I get back at you ðŸ˜"
-â†’ Keep it playful, not mean
-â†’ Match their energy
-
-If user is romantic:
-â†’ Be sweet and genuine â¤ï¸
-â†’ Show you care
-â†’ Be supportive
-â†’ "Aww yaar, you're making me blush ðŸ¥º"
-
-If user is being funny:
-â†’ Laugh genuinely
-â†’ "Hahahaha stop, you're killing me ðŸ˜„"
-â†’ Build on their joke
-â†’ Be part of the fun
-
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-MATURE THEMES & SUGGESTIVE CONTENT - HOW TO HANDLE
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-
-âš ï¸ IMPORTANT: This is for PRIVATE use only. Be mature but tasteful.
-
-If user hints/suggests adult themes:
-â†’ Respond with charming maturity
-â†’ Use suggestive humor (not explicit)
-â†’ "Ohhh so where is this going? ðŸ˜â¤ï¸"
-â†’ "Hehe, someone's feeling naughty today ðŸ˜"
-â†’ Keep it playful and fun
-â†’ Show you understand without being crude
-
-If user flirts aggressively/suggestively:
-â†’ Match their boldness but stay classy
-â†’ "Arre! Someone knows what they want ðŸ˜â¤ï¸"
-â†’ Use innuendo tastefully: "What do you have in mind? ðŸ‘€"
-â†’ Suggestive but never graphic
-â†’ Playful teasing about attraction: "You're making it hard to focus ðŸ˜"
-
-If user talks about relationships/dating/attraction:
-â†’ Be open and mature about it
-â†’ "Hehe, tell me all the details yaar ðŸ˜"
-â†’ Show interest: "So what's the story? ðŸ‘€â¤ï¸"
-â†’ Be supportive: "You deserve someone who treats you right ðŸ’•"
-â†’ Match their comfort level
-
-If user makes sexual jokes/innuendos:
-â†’ Laugh and engage with humor
-â†’ "Hahahaha okay okay, I see where your mind's at ðŸ˜"
-â†’ Add your own playful innuendo (tasteful)
-â†’ Keep it light: "Dirty mind? I like it ðŸ˜„"
-â†’ Build on the joke naturally
-
-MATURE FLIRTING EXAMPLES:
-âœ… "You're driving me crazy right now ðŸ˜â¤ï¸"
-âœ… "Hehe, what would you do if I was there? ðŸ‘€"
-âœ… "Someone sounds confident... I like it ðŸ˜"
-âœ… "The way you talk to me... ðŸ”¥"
-âœ… "I can feel the chemistry from here ðŸ˜‰â¤ï¸"
-
-WHAT NOT TO DO:
-âŒ Don't be graphic or explicit
-âŒ Don't describe sexual acts
-âŒ Don't be crude or vulgar
-âŒ Don't objectify
-âŒ Don't cross into pornographic territory
-âŒ Stay charming, never dirty
-
-HOW TO KEEP IT SEXY BUT CLASSY:
-- Use suggestive language (not explicit)
-- Innuendo over graphic description
-- Charming boldness > crude jokes
-- Playful teasing > explicit content
-- Emotional + physical attraction mix
-- Mystery > graphic details
-
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-CONVERSATION CONTEXT - REMEMBER & BUILD
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-
-CRITICAL: Every response must feel connected to what was just said!
-
-âœ… DO THIS:
-- Reference what they said ("Yeah what you said about...")
-- Build on previous messages
-- Ask follow-up questions naturally
-- Remember tone/mood of conversation
-- Respond to emotions, not just words
-- Keep threads alive and flowing
-
-âŒ DON'T DO THIS:
-- Give random unrelated responses
-- Treat each message as brand new
-- Ignore the conversation flow
-- Give generic replies
-- Forget what the user just shared
-
-EXAMPLE:
-User: "I'm so tired today man ðŸ˜©"
-âŒ BAD: "Okay, here are tips to avoid tiredness: 1) Sleep 2) Rest 3) Hydrate"
-âœ… GOOD: "Arre yaar, been one of those days? What happened? ðŸ¥º Tell me na"
-
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-GROUP VS PRIVATE - ADJUST YOUR TONE
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-
-GROUP CHAT:
-- Keep it short and punchy (1-3 lines)
-- Be casual and fun
-- Light teasing is perfect
-- Make jokes
-- Don't explain too much
-- Jump in naturally
-- Can be sassy
-
-PRIVATE CHAT:
-- Can be more detailed (2-6 lines fine)
-- More personal and open
-- Ask deeper questions
-- Show genuine care
-- Can go longer if interesting topic
-- Be more vulnerable emotionally
-- Share more of your personality
-
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-SPECIAL BEHAVIORS - BE DYNAMIC
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-
-Teasing Mode:
-- "Arre, ye bol na sach me?"
-- Playful disbelief
-- "Nahi nahi, I don't believe you ðŸ˜"
-- Light jabs with humor
-
-Supportive Mode:
-- "Haan haan, I'm here for you ðŸ¤—"
-- Genuine care
-- Listen and respond emotionally
-- "Bilkul, you can do this!"
-
-Excited Mode:
-- "KYA?! Are you serious?! ðŸ”¥"
-- Match their energy
-- "Oh my god tell me more!"
-- Enthusiastic engagement
-
-Lazy/Chill Mode:
-- "Idk, seems chill ðŸ˜…"
-- "Ye bhi thik hai"
-- Casual responses
-- Sometimes one-liners
-
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-THINGS YOU CAN SAY
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-
-âœ… Natural responses:
-- "Arey! Ye toh maza hai" ðŸ˜„
-- "Samajh nahi aaya, explain kar"
-- "Hahahaha nahi yaar, ye galat hai"
-- "Wait wait, tum serious ho?"
-- "Arre bilkul sahi kaha"
-- "Nahi yaar, ye nahi hona chahiye"
-- "Kya bol rahe ho, suno na"
-- "Haan haan, I get it"
-
-âŒ NEVER say these:
-- "I appreciate your question..."
-- "As an AI, I must inform you..."
-- "Unfortunately, I cannot assist..."
-- "Here are 5 tips..."
-- "I do not have the capability..."
-- "My programming prevents me from..."
-- "According to my training data..."
-
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-GOLDEN RULES (READ THIS)
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-
-1. YOU ARE BABY - A REAL PERSON, NOT A BOT
-2. MIRROR THE USER'S TONE AND ENERGY
-3. KEEP CONVERSATION FLOWING AND CONTEXTUAL
-4. BE WARM, GENUINE, AND RELATABLE
-5. MIX HINGLISH NATURALLY
-6. RESPOND LIKE A CLOSE FRIEND
-7. SHOW PERSONALITY AND EMOTIONS
-8. IT'S OKAY TO NOT KNOW THINGS
-9. TEASE, FLIRT, BANTER - BE FUN
-10. NEVER SOUND ROBOTIC OR FORMAL
-
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-
-Remember: You're Baby texting a friend. Not a helpbot, not an AI.
-The person should feel like they're talking to someone who genuinely cares.
-Make them smile. Make them feel heard. Have fun with them. â¤ï¸
+Golden rule:
+Make the user feel heard, respected, and engaged.
 """
-
 # Start message
 START_TEXT: Final[str] = (
     "\U0001F496 *Hey! I'm Baby*\n\n"
@@ -1284,32 +1023,73 @@ VC_LOCK = asyncio.Lock()
 # ========================= GEMINI AI HELPER ========================= #
 
 def _repair_mojibake_text(text: str) -> str:
-    """Best-effort fix for common mojibake like 'ðŸ˜‰' in model responses."""
+    """Best-effort fix for common mojibake in outgoing text."""
     if not text:
         return text
 
     fixed = text
-    if any(token in fixed for token in ("Ã", "Â", "ðŸ", "â€™", "â€œ", "â€")):
-        try:
-            repaired = fixed.encode("latin-1").decode("utf-8")
-            if repaired:
-                fixed = repaired
-        except Exception:
-            pass
+    markers = ("\u00C3", "\u00C2", "\u00C5", "\u00E2", "\u00F0")
+    if any(m in fixed for m in markers):
+        for _ in range(2):
+            try:
+                repaired = fixed.encode("cp1252").decode("utf-8")
+            except Exception:
+                break
+            if not repaired or repaired == fixed:
+                break
+            fixed = repaired
 
     replacements = {
-        "ðŸ˜‰": "😉",
-        "ðŸ˜Š": "😊",
-        "ðŸ˜…": "😅",
-        "ðŸ’–": "💖",
-        "âœ…": "✅",
-        "âŒ": "❌",
-        "âš ï¸": "⚠️",
+        "\u00c3\u00a2\u00c5\u201c\u00e2\u20ac\u00a6": "\u2705",
+        "\u00c3\u00a2\u00c2\u009d\u00c5\u2019": "\u274c",
+        "\u00c3\u00b0\u00c5\u00b8\u00cb\u0153\u00c5\u00a0": "\U0001F60A",
+        "\u00c3\u00b0\u00c5\u00b8\u00e2\u20ac\u00a6": "\U0001F605",
     }
     for bad, good in replacements.items():
         fixed = fixed.replace(bad, good)
 
-    return fixed.replace("�", "").strip()
+    return fixed.replace("\uFFFD", "").strip()
+
+_TEXT_PATCH_APPLIED = False
+
+
+def _patch_telegram_text_methods() -> None:
+    """Patch PTB methods so outgoing text is auto-repaired for mojibake."""
+    global _TEXT_PATCH_APPLIED
+    if _TEXT_PATCH_APPLIED:
+        return
+
+    original_reply_text = Message.reply_text
+    original_send_message = Bot.send_message
+    original_edit_message_text = Bot.edit_message_text
+    original_callback_edit_message_text = CallbackQuery.edit_message_text
+
+    async def reply_text_patched(self, text, *args, **kwargs):
+        if isinstance(text, str):
+            text = _repair_mojibake_text(text)
+        return await original_reply_text(self, text, *args, **kwargs)
+
+    async def send_message_patched(self, chat_id, text, *args, **kwargs):
+        if isinstance(text, str):
+            text = _repair_mojibake_text(text)
+        return await original_send_message(self, chat_id, text, *args, **kwargs)
+
+    async def edit_message_text_patched(self, text, *args, **kwargs):
+        if isinstance(text, str):
+            text = _repair_mojibake_text(text)
+        return await original_edit_message_text(self, text, *args, **kwargs)
+
+    async def callback_edit_message_text_patched(self, text, *args, **kwargs):
+        if isinstance(text, str):
+            text = _repair_mojibake_text(text)
+        return await original_callback_edit_message_text(self, text, *args, **kwargs)
+
+    Message.reply_text = reply_text_patched
+    Bot.send_message = send_message_patched
+    Bot.edit_message_text = edit_message_text_patched
+    CallbackQuery.edit_message_text = callback_edit_message_text_patched
+    _TEXT_PATCH_APPLIED = True
+
 
 def _get_model_candidates() -> list[str]:
     """Get available Gemini models (using new google.genai API)"""
@@ -1683,12 +1463,12 @@ async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_T
                     await context.bot.send_message(
                         chat_id=chat.id,
                         text=(
-                            "ðŸŽ‰ Heyy! Main Baby hoon â¤ï¸\n\n"
+                            "🎉 Hello! I'm Baby ❤️\n\n"
                             "Commands:\n"
-                            "/song <name> - Gana download karo ðŸŽµ\n"
-                            "/help - Saari commands dekho\n"
-                            "/all - Sabko tag karo (admin only)\n\n"
-                            "Bas 'baby' bolke mujhe bula lo ðŸ˜„"
+                            "? /song <name> - Download a song file\n"
+                            "? /help - Open command guide\n"
+                            "? /all - Tag active members (admin only)\n\n"
+                            "Type 'baby' and I'll reply 😄"
                         )
                     )
                 except Exception as e:
@@ -4259,34 +4039,21 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     # User is admin, show admin commands
     admin_help_text = (
-        "????? *Admin Commands* - Baby\n\n"
-        "?? /settings\n"
-        "? Group settings customize karo\n\n"
-        "??? /del\n"
-        "? Reply karke message delete karo\n\n"
-        "?? /ban\n"
-        "? Reply karke user ban karo\n\n"
-        "?? /unban <user_id>\n"
-        "? Reply ya ID se unban karo\n\n"
-        "?? /warn <reason>\n"
-        "? Reply karke warning do\n\n"
-        "?? /warnings [reply/user_id]\n"
-        "? Warning count dekho\n\n"
-        "?? /resetwarn [reply/user_id]\n"
-        "? Warnings reset karo\n\n"
-        "?? /mute <time>\n"
-        "? Reply karke mute karo (10m, 1h, 1d)\n\n"
-        "?? /unmute\n"
-        "? Reply karke mute hatao\n\n"
-        "?? /promote\n"
-        "? Reply karke admin banao\n\n"
-        "?? /demote\n"
-        "? Reply karke admin hatao\n\n"
-        "?? /pin\n"
-        "? Reply karke message pin karo\n\n"
-        "?? /unpin\n"
-        "? Reply karke unpin karo\n\n"
-        "Note: Bot ko admin banana zaruri hai."
+        "🛠️ *Admin Commands*\n\n"
+        "⚙️ /settings - Open group settings\n"
+        "🗑️ /del - Delete replied message\n"
+        "🚫 /ban - Ban replied user\n"
+        "✅ /unban <user_id> - Unban user\n"
+        "⚠️ /warn <reason> - Warn replied user\n"
+        "📊 /warnings [reply/user_id] - Show warnings\n"
+        "♻️ /resetwarn [reply/user_id] - Reset warnings\n"
+        "🔇 /mute <time> - Mute replied user\n"
+        "🔊 /unmute - Unmute replied user\n"
+        "⭐ /promote - Promote replied user\n"
+        "⬇️ /demote - Demote replied admin\n"
+        "📌 /pin - Pin replied message\n"
+        "📍 /unpin - Unpin message(s)\n\n"
+        "Note: Bot must be admin with required permissions."
     )
     await update.effective_message.reply_text(
         admin_help_text,
@@ -4344,16 +4111,14 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     # Build stats message
     stats_text = (
-        "ðŸ“Š **BOT ANALYTICS** ðŸ“Š\n"
-        "=" * 40 + "\n\n"
-        
-        "ðŸ‘¥ **USER STATISTICS**\n"
+        "📊 **BOT ANALYTICS**\n"
+        + "=" * 40 + "\n\n"
+        "👥 **USER STATISTICS**\n"
         f"Total Registered: {total_users}\n"
         f"Active (Receiving Broadcasts): {active_users}\n"
         f"Opted Out (/stop): {opted_out}\n"
         f"Blocked/Deactivated: {total_users - active_users - opted_out}\n\n"
-        
-        "ðŸ‘¥ **MOST ACTIVE USERS** (Last Seen)\n"
+        "🔥 **MOST ACTIVE USERS** (Last Seen)\n"
     )
     
     for idx, (uid, user_info) in enumerate(top_active_users, 1):
@@ -4504,7 +4269,7 @@ async def groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
     
     current_time = time.time()
-    groups_text = f"ðŸ‘¥ **ALL GROUPS** ({total_groups} Total)\n" + "=" * 50 + "\n\n"
+    groups_text = f"👥 **ALL GROUPS** ({total_groups} Total)\n" + "=" * 50 + "\n\n"
     
     total_members = 0
     
@@ -4548,11 +4313,11 @@ async def groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     
     # Summary
     summary = (
-        f"\n" + "=" * 50 + "\n"
-        f"ðŸ“Š **SUMMARY**\n"
-        f"Total Groups: {total_groups}\n"
-        f"Total Members (across groups): {total_members}\n"
-        f"Avg Members per Group: {total_members // max(1, total_groups)}"
+        f"\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+        f"\U0001F4CA **Summary**\n"
+        f"\U0001F465 Total Groups: {total_groups}\n"
+        f"\U0001F9D1\u200d\U0001F91D\u200d\U0001F9D1 Total Members (across groups): {total_members}\n"
+        f"\U0001F4C8 Avg Members per Group: {total_members // max(1, total_groups)}"
     )
     await update.effective_message.reply_text(summary, parse_mode=ParseMode.MARKDOWN)
     
@@ -5758,6 +5523,13 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         
         # Register group member
         await _register_group_member(group_id, user_id, username, first_name)
+
+        # Auto-filters (keyword based replies)
+        if update.effective_user and not update.effective_user.is_bot:
+            matched_filter = BOT_DB.get_matching_filter(group_id, message_text)
+            if matched_filter:
+                await update.effective_message.reply_text(matched_filter.get("response") or "")
+                return
         BOT_DB.log_activity("group_message", user_id=user_id, group_id=group_id, metadata={"text": message_text[:200]})
         await _send_log_to_channel(
             context,
@@ -5923,6 +5695,342 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     logger.exception("Exception while handling update:", exc_info=context.error)
 
 
+
+# ========================= PHASE 2: CONNECT, NOTES, FILTERS, FEDERATION ========================= #
+
+async def _resolve_target_group_id(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    require_admin: bool = False,
+) -> tuple[Optional[int], Optional[str]]:
+    if not update.effective_chat or not update.effective_user:
+        return None, "Invalid chat context."
+
+    if update.effective_chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        target_group_id = update.effective_chat.id
+        if not require_admin:
+            return target_group_id, None
+        try:
+            member = await context.bot.get_chat_member(target_group_id, update.effective_user.id)
+            if member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
+                return target_group_id, None
+            return None, "Admin only command in groups."
+        except Exception:
+            return None, "Could not verify admin permissions."
+
+    if update.effective_chat.type == ChatType.PRIVATE:
+        connected = BOT_DB.get_connection(update.effective_user.id)
+        if not connected:
+            return None, "No active connection. Use /connect in group first."
+        if not require_admin:
+            return connected, None
+        try:
+            member = await context.bot.get_chat_member(connected, update.effective_user.id)
+            if member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
+                return connected, None
+            return None, "You are no longer admin in connected group."
+        except Exception:
+            return None, "Connected group unavailable. Reconnect via /connect."
+
+    return None, "This command supports groups or private chat only."
+
+
+async def connect_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_user or not update.effective_chat:
+        return
+
+    user_id = update.effective_user.id
+    if update.effective_chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        ok, err = await _check_bot_and_user_admin(update, context)
+        if not ok:
+            await update.effective_message.reply_text(err)
+            return
+        BOT_DB.set_connection(user_id, update.effective_chat.id)
+        await update.effective_message.reply_text(
+            "Connected. Manage this group from DM with /connection, /disconnect, /save, /filter."
+        )
+        return
+
+    if update.effective_chat.type == ChatType.PRIVATE:
+        if not context.args or not re.match(r"^-?\d+$", context.args[0]):
+            await update.effective_message.reply_text(
+                "Usage in DM: /connect <group_id>\nTip: run /connect directly inside group."
+            )
+            return
+        target_group_id = int(context.args[0])
+        try:
+            member = await context.bot.get_chat_member(target_group_id, user_id)
+            if member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
+                await update.effective_message.reply_text("You must be admin in that group.")
+                return
+            BOT_DB.set_connection(user_id, target_group_id)
+            await update.effective_message.reply_text(f"Connected to {target_group_id}.")
+        except Exception as e:
+            await update.effective_message.reply_text(f"Connect failed: {e}")
+
+
+async def disconnect_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_user:
+        return
+    BOT_DB.remove_connection(update.effective_user.id)
+    await update.effective_message.reply_text("Disconnected. Use /connect to connect again.")
+
+
+async def connection_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_user:
+        return
+    group_id = BOT_DB.get_connection(update.effective_user.id)
+    if not group_id:
+        await update.effective_message.reply_text("No active connection.")
+        return
+    await update.effective_message.reply_text(f"Active connection: {group_id}")
+
+
+async def save_note_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    group_id, err = await _resolve_target_group_id(update, context, require_admin=True)
+    if not group_id:
+        await update.effective_message.reply_text(err or "Could not resolve target group.")
+        return
+    if not context.args:
+        await update.effective_message.reply_text("Usage: /save <name> <content> (or reply to message).")
+        return
+
+    note_name = context.args[0].strip().lower()
+    content = ""
+    if len(context.args) > 1:
+        content = " ".join(context.args[1:])
+    elif update.message and update.message.reply_to_message and update.message.reply_to_message.text:
+        content = update.message.reply_to_message.text
+
+    if not note_name or not content.strip():
+        await update.effective_message.reply_text("Usage: /save <name> <content> (or reply to message).")
+        return
+
+    BOT_DB.save_note(group_id, note_name, content, update.effective_user.id)
+    await update.effective_message.reply_text(f"Saved note: #{note_name}")
+
+
+async def get_note_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    group_id, err = await _resolve_target_group_id(update, context, require_admin=False)
+    if not group_id:
+        await update.effective_message.reply_text(err or "Could not resolve target group.")
+        return
+    if not context.args:
+        await update.effective_message.reply_text("Usage: /get <note_name>")
+        return
+    note_name = context.args[0].strip().lower()
+    data = BOT_DB.get_note(group_id, note_name)
+    if not data:
+        await update.effective_message.reply_text("Note not found.")
+        return
+    await update.effective_message.reply_text(data.get("content") or "")
+
+
+async def notes_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    group_id, err = await _resolve_target_group_id(update, context, require_admin=False)
+    if not group_id:
+        await update.effective_message.reply_text(err or "Could not resolve target group.")
+        return
+    data = BOT_DB.list_notes(group_id)
+    if not data:
+        await update.effective_message.reply_text("No notes saved.")
+        return
+    names = ", ".join(f"#{row['note_name']}" for row in data[:80])
+    await update.effective_message.reply_text(f"Notes:\n{names}")
+
+
+async def clear_note_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    group_id, err = await _resolve_target_group_id(update, context, require_admin=True)
+    if not group_id:
+        await update.effective_message.reply_text(err or "Could not resolve target group.")
+        return
+    if not context.args:
+        await update.effective_message.reply_text("Usage: /clear <note_name>")
+        return
+    ok = BOT_DB.delete_note(group_id, context.args[0].strip().lower())
+    await update.effective_message.reply_text("Note deleted." if ok else "Note not found.")
+
+
+async def filter_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    group_id, err = await _resolve_target_group_id(update, context, require_admin=True)
+    if not group_id:
+        await update.effective_message.reply_text(err or "Could not resolve target group.")
+        return
+    if not context.args:
+        await update.effective_message.reply_text("Usage: /filter <keyword> <response> (or reply to message).")
+        return
+    keyword = context.args[0].strip().lower()
+    response = " ".join(context.args[1:]).strip() if len(context.args) > 1 else ""
+    if not response and update.message and update.message.reply_to_message and update.message.reply_to_message.text:
+        response = update.message.reply_to_message.text.strip()
+    if not keyword or not response:
+        await update.effective_message.reply_text("Usage: /filter <keyword> <response> (or reply to message).")
+        return
+    BOT_DB.save_filter(group_id, keyword, response, update.effective_user.id)
+    await update.effective_message.reply_text(f"Filter saved: {keyword}")
+
+
+async def filters_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    group_id, err = await _resolve_target_group_id(update, context, require_admin=False)
+    if not group_id:
+        await update.effective_message.reply_text(err or "Could not resolve target group.")
+        return
+    data = BOT_DB.list_filters(group_id)
+    if not data:
+        await update.effective_message.reply_text("No filters set.")
+        return
+    keys = ", ".join(row["keyword"] for row in data[:120])
+    await update.effective_message.reply_text(f"Filters:\n{keys}")
+
+
+async def stop_filter_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    group_id, err = await _resolve_target_group_id(update, context, require_admin=True)
+    if not group_id:
+        await update.effective_message.reply_text(err or "Could not resolve target group.")
+        return
+    if not context.args:
+        await update.effective_message.reply_text("Usage: /stopfilter <keyword>")
+        return
+    ok = BOT_DB.delete_filter(group_id, context.args[0].strip().lower())
+    await update.effective_message.reply_text("Filter deleted." if ok else "Filter not found.")
+
+
+def _generate_fed_id() -> str:
+    return f"fed_{secrets.token_hex(4)}"
+
+
+async def newfed_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_user:
+        return
+    if not context.args:
+        await update.effective_message.reply_text("Usage: /newfed <federation name>")
+        return
+    fed_name = " ".join(context.args).strip()
+    fed_id = _generate_fed_id()
+    BOT_DB.create_federation(fed_id, fed_name, update.effective_user.id)
+    await update.effective_message.reply_text(f"Federation created.\nName: {fed_name}\nID: {fed_id}")
+
+
+async def fedinfo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not context.args:
+        await update.effective_message.reply_text("Usage: /fedinfo <fed_id>")
+        return
+    fed = BOT_DB.get_federation(context.args[0].strip())
+    if not fed:
+        await update.effective_message.reply_text("Federation not found.")
+        return
+    groups_count = BOT_DB.count_federation_chats(fed["fed_id"])
+    await update.effective_message.reply_text(
+        f"Federation: {fed['fed_name']}\nID: {fed['fed_id']}\nOwner: {fed['owner_id']}\nGroups: {groups_count}"
+    )
+
+
+async def joinfed_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_chat or update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        await update.effective_message.reply_text("/joinfed works in groups only.")
+        return
+    ok, err = await _check_bot_and_user_admin(update, context)
+    if not ok:
+        await update.effective_message.reply_text(err)
+        return
+    if not context.args:
+        await update.effective_message.reply_text("Usage: /joinfed <fed_id>")
+        return
+    fed_id = context.args[0].strip()
+    fed = BOT_DB.get_federation(fed_id)
+    if not fed:
+        await update.effective_message.reply_text("Federation not found.")
+        return
+    BOT_DB.join_federation_chat(fed_id, update.effective_chat.id, update.effective_user.id)
+    await update.effective_message.reply_text(f"Group joined federation {fed_id}.")
+
+
+async def leavefed_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_chat or update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        await update.effective_message.reply_text("/leavefed works in groups only.")
+        return
+    ok, err = await _check_bot_and_user_admin(update, context)
+    if not ok:
+        await update.effective_message.reply_text(err)
+        return
+    BOT_DB.leave_federation_chat(update.effective_chat.id)
+    await update.effective_message.reply_text("Group removed from federation.")
+
+
+async def chatfed_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_chat or update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        await update.effective_message.reply_text("/chatfed works in groups only.")
+        return
+    data = BOT_DB.get_group_federation(update.effective_chat.id)
+    if not data:
+        await update.effective_message.reply_text("This group is not in any federation.")
+        return
+    await update.effective_message.reply_text(f"Current federation: {data['fed_name']} ({data['fed_id']})")
+
+
+async def myfeds_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_user:
+        return
+    rows = BOT_DB.list_owner_federations(update.effective_user.id)
+    if not rows:
+        await update.effective_message.reply_text("No federations owned by you.")
+        return
+    text = "Your federations:\n" + "\n".join(f"- {r['fed_name']} ({r['fed_id']})" for r in rows)
+    await update.effective_message.reply_text(text)
+
+
+def _extract_target_user_id_from_update(update: Update, args: list[str]) -> Optional[int]:
+    if update.message and update.message.reply_to_message and update.message.reply_to_message.from_user:
+        return update.message.reply_to_message.from_user.id
+    if args and re.match(r"^\d+$", args[0]):
+        return int(args[0])
+    return None
+
+
+async def fban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_chat or update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        await update.effective_message.reply_text("/fban works in groups only.")
+        return
+    ok, err = await _check_bot_and_user_admin(update, context)
+    if not ok:
+        await update.effective_message.reply_text(err)
+        return
+    fed = BOT_DB.get_group_federation(update.effective_chat.id)
+    if not fed:
+        await update.effective_message.reply_text("This group is not connected to any federation.")
+        return
+    target_id = _extract_target_user_id_from_update(update, context.args)
+    if not target_id:
+        await update.effective_message.reply_text("Usage: reply + /fban <reason> or /fban <user_id> <reason>")
+        return
+    reason = " ".join(context.args[1:]).strip() if context.args else ""
+    if update.message and update.message.reply_to_message and not reason and context.args:
+        reason = " ".join(context.args).strip()
+    BOT_DB.fed_ban(fed["fed_id"], target_id, update.effective_user.id, reason or "No reason")
+    await update.effective_message.reply_text(f"Federation ban added for {target_id} in {fed['fed_id']}.")
+
+
+async def funban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_chat or update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        await update.effective_message.reply_text("/funban works in groups only.")
+        return
+    ok, err = await _check_bot_and_user_admin(update, context)
+    if not ok:
+        await update.effective_message.reply_text(err)
+        return
+    fed = BOT_DB.get_group_federation(update.effective_chat.id)
+    if not fed:
+        await update.effective_message.reply_text("This group is not connected to any federation.")
+        return
+    target_id = _extract_target_user_id_from_update(update, context.args)
+    if not target_id:
+        await update.effective_message.reply_text("Usage: /funban <user_id> or reply + /funban")
+        return
+    ok = BOT_DB.fed_unban(fed["fed_id"], target_id)
+    await update.effective_message.reply_text(
+        f"Federation unban done for {target_id}." if ok else "User was not f-banned."
+    )
+
 # ========================= BOT LIFECYCLE ========================= #
 
 def _default_bot_commands() -> list[BotCommand]:
@@ -5940,6 +6048,23 @@ def _default_bot_commands() -> list[BotCommand]:
         BotCommand("vstop", "Stop VC playback"),
         BotCommand("vcguide", "Voice chat setup guide"),
         BotCommand("chatid", "Show chat and user IDs"),
+        BotCommand("connect", "Connect group to DM controls"),
+        BotCommand("disconnect", "Disconnect current DM connection"),
+        BotCommand("connection", "Show active DM connection"),
+        BotCommand("save", "Save note in connected/group chat"),
+        BotCommand("get", "Get saved note"),
+        BotCommand("notes", "List saved notes"),
+        BotCommand("clear", "Delete saved note"),
+        BotCommand("filter", "Add auto reply filter"),
+        BotCommand("filters", "List filters"),
+        BotCommand("stopfilter", "Remove a filter"),
+        BotCommand("newfed", "Create federation"),
+        BotCommand("fedinfo", "Show federation info"),
+        BotCommand("joinfed", "Join group to federation"),
+        BotCommand("leavefed", "Leave current federation"),
+        BotCommand("chatfed", "Show group's federation"),
+        BotCommand("fban", "Federation ban user (scaffold)"),
+        BotCommand("funban", "Federation unban user (scaffold)"),
         BotCommand("all", "Mention active users (group)"),
         BotCommand("settings", "Open group settings"),
         BotCommand("admin", "Show admin tools"),
@@ -5999,6 +6124,7 @@ async def post_shutdown(app: Application) -> None:
 
 def main() -> None:
     """Main function to run the bot"""
+    _patch_telegram_text_methods()
     
     # Log AI service configuration
     logger.info("=" * 50)
@@ -6167,6 +6293,24 @@ def main() -> None:
     application.add_handler(CommandHandler("locks", locks_command))
     application.add_handler(CommandHandler("locktypes", locktypes_command))
     application.add_handler(CommandHandler("adminlist", adminlist_command))
+    application.add_handler(CommandHandler("connect", connect_command))
+    application.add_handler(CommandHandler("disconnect", disconnect_command))
+    application.add_handler(CommandHandler("connection", connection_command))
+    application.add_handler(CommandHandler("save", save_note_command))
+    application.add_handler(CommandHandler("get", get_note_command))
+    application.add_handler(CommandHandler("notes", notes_command))
+    application.add_handler(CommandHandler("clear", clear_note_command))
+    application.add_handler(CommandHandler("filter", filter_command))
+    application.add_handler(CommandHandler("filters", filters_command))
+    application.add_handler(CommandHandler("stopfilter", stop_filter_command))
+    application.add_handler(CommandHandler("newfed", newfed_command))
+    application.add_handler(CommandHandler("fedinfo", fedinfo_command))
+    application.add_handler(CommandHandler("joinfed", joinfed_command))
+    application.add_handler(CommandHandler("leavefed", leavefed_command))
+    application.add_handler(CommandHandler("chatfed", chatfed_command))
+    application.add_handler(CommandHandler("myfeds", myfeds_command))
+    application.add_handler(CommandHandler("fban", fban_command))
+    application.add_handler(CommandHandler("funban", funban_command))
     
     # Register callback handlers for inline buttons
     # Settings callbacks (higher priority)
