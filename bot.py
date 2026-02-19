@@ -1021,6 +1021,7 @@ logger = logging.getLogger("ANIMX_CLAN_BOT")
 BOT_DB = BotDatabase(Path("bot_data.db"))
 VC_MANAGER: Optional[VCManager] = None
 VC_LOCK = asyncio.Lock()
+VC_ASSISTANT_PRESENT_CACHE: Dict[int, float] = {}
 
 # ========================= GEMINI AI HELPER ========================= #
 
@@ -1331,6 +1332,26 @@ async def _get_vc_manager() -> VCManager:
     global VC_MANAGER
     if VC_MANAGER is not None:
         return VC_MANAGER
+
+
+async def _is_assistant_in_chat_by_bot(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    assistant_id: Optional[int],
+) -> bool:
+    """Bot API based assistant membership check (more stable than assistant-side checks)."""
+    if not assistant_id:
+        return False
+    try:
+        cm = await context.bot.get_chat_member(chat_id=chat_id, user_id=assistant_id)
+        return cm.status in {
+            ChatMemberStatus.MEMBER,
+            ChatMemberStatus.ADMINISTRATOR,
+            ChatMemberStatus.OWNER,
+            ChatMemberStatus.RESTRICTED,
+        }
+    except Exception:
+        return False
 
     async with VC_LOCK:
         if VC_MANAGER is not None:
@@ -4685,9 +4706,21 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         vc = await _get_vc_manager()
         chat_id = update.effective_chat.id
 
-        # Auto-join assistant if missing in group (best effort).
-        if not await vc.is_assistant_in_chat(chat_id):
-            assistant_id, assistant_username = await vc.get_assistant_identity()
+        assistant_id, assistant_username = await vc.get_assistant_identity()
+        now_ts = time.time()
+        cache_hit = (
+            chat_id in VC_ASSISTANT_PRESENT_CACHE
+            and (now_ts - VC_ASSISTANT_PRESENT_CACHE[chat_id]) < 1800
+        )
+        assistant_present = cache_hit or await _is_assistant_in_chat_by_bot(
+            context, chat_id, assistant_id
+        )
+        if not assistant_present:
+            # Fallback check from assistant side once before invite flow.
+            assistant_present = await vc.is_assistant_in_chat(chat_id)
+
+        # Auto-join assistant only if truly missing.
+        if not assistant_present:
             if assistant_id:
                 # If assistant was banned in group, try to unban automatically.
                 try:
@@ -4744,7 +4777,10 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 )
                 return
 
-            if not await vc.is_assistant_in_chat(chat_id):
+            assistant_present = await _is_assistant_in_chat_by_bot(context, chat_id, assistant_id)
+            if not assistant_present:
+                assistant_present = await vc.is_assistant_in_chat(chat_id)
+            if not assistant_present:
                 assistant_line = (
                     f"Assistant: @{assistant_username}"
                     if assistant_username
@@ -4756,6 +4792,8 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     f"{assistant_line}"
                 )
                 return
+
+        VC_ASSISTANT_PRESENT_CACHE[chat_id] = now_ts
 
         requested_by = update.effective_user.first_name or "User"
         mode, track = await vc.enqueue_or_play(chat_id, query, requested_by)
