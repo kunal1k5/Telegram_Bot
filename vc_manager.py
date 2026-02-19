@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 import re
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -46,8 +47,27 @@ class VCManager:
             try:
                 from pyrogram import Client
                 from pytgcalls import PyTgCalls
-                from pytgcalls.types.input_stream import AudioPiped
                 import yt_dlp
+
+                audio_piped_cls = None
+                audio_import_errors: list[str] = []
+                for module_name, class_name in [
+                    ("pytgcalls.types.input_stream", "AudioPiped"),
+                    ("pytgcalls.types.input_stream.audio_piped", "AudioPiped"),
+                    ("pytgcalls.types", "AudioPiped"),
+                ]:
+                    try:
+                        module = importlib.import_module(module_name)
+                        audio_piped_cls = getattr(module, class_name)
+                        break
+                    except Exception as ie:
+                        audio_import_errors.append(f"{module_name}.{class_name}: {ie}")
+
+                if audio_piped_cls is None:
+                    raise RuntimeError(
+                        "Could not import AudioPiped from pytgcalls. "
+                        + " | ".join(audio_import_errors)
+                    )
             except Exception as e:
                 raise RuntimeError(
                     "VC dependencies missing. Install pyrogram, tgcrypto, py-tgcalls, yt-dlp. "
@@ -66,7 +86,7 @@ class VCManager:
             self._calls = PyTgCalls(self._assistant)
             await self._calls.start()
 
-            self._audio_piped_cls = AudioPiped
+            self._audio_piped_cls = audio_piped_cls
             self._yt_dlp = yt_dlp
             self._ready = True
 
