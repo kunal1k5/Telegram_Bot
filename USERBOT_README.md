@@ -37,7 +37,7 @@ pip install -r userbot_requirements.txt
 $env:API_ID="YOUR_API_ID"
 $env:API_HASH="YOUR_API_HASH"
 $env:PHONE_NUMBER="+91XXXXXXXXXX"  # Your phone with country code
-$env:OPENROUTER_API_KEY="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"
+$env:OPENROUTER_API_KEY="your_openrouter_api_key"
 $env:OPENROUTER_MODEL="openai/gpt-4o-mini"
 $env:GEMINI_API_KEY=""  # Optional fallback
 ```
@@ -47,7 +47,7 @@ $env:GEMINI_API_KEY=""  # Optional fallback
 export API_ID="YOUR_API_ID"
 export API_HASH="YOUR_API_HASH"
 export PHONE_NUMBER="+91XXXXXXXXXX"
-export OPENROUTER_API_KEY="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"
+export OPENROUTER_API_KEY="your_openrouter_api_key"
 export OPENROUTER_MODEL="openai/gpt-4o-mini"
 export GEMINI_API_KEY=""
 ```

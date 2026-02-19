@@ -10,8 +10,8 @@ import google.generativeai as genai
 API_ID = os.getenv("API_ID", "")  # Get from my.telegram.org
 API_HASH = os.getenv("API_HASH", "")  # Get from my.telegram.org
 PHONE_NUMBER = os.getenv("PHONE_NUMBER", "")  # Your phone number with country code
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyCOa0Yf2QBH3Eb45-A5n-PFbdTHtRSeONM")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "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")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
 
 # Validate required fields
