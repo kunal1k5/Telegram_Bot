@@ -229,28 +229,66 @@ class VCManager:
         return None
 
     def _resolve_track_sync(self, query: str, requested_by: str) -> VCTrack:
-        ydl_opts = {
+        base_opts = {
             "quiet": True,
             "noplaylist": True,
             "nocheckcertificate": True,
             "default_search": "ytsearch1",
             "extract_flat": False,
             "skip_download": True,
-            "format": "bestaudio/best",
-            "extractor_args": {
-                "youtube": {
-                    "player_client": ["android", "web"],
-                }
-            },
         }
         cookie_file = self._resolve_cookie_file()
         if cookie_file:
-            ydl_opts["cookiefile"] = cookie_file
+            base_opts["cookiefile"] = cookie_file
+
+        # Some videos fail for a specific format string, so try a small fallback chain.
+        format_profiles = [
+            {
+                "format": "bestaudio[ext=m4a]/bestaudio/best",
+                "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
+            },
+            {
+                "format": "bestaudio/best",
+                "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
+            },
+            {"format": "best"},
+            {},  # Let yt-dlp auto-pick.
+        ]
 
         search_target = query if self._is_url(query) else f"ytsearch1:{query}"
-        with self._yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        last_error: Optional[Exception] = None
+        for profile in format_profiles:
+            ydl_opts = dict(base_opts)
+            ydl_opts.update(profile)
             try:
-                info = ydl.extract_info(search_target, download=False)
+                with self._yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(search_target, download=False)
+                    if not info:
+                        raise RuntimeError("No track found")
+                    if "entries" in info:
+                        entries = info.get("entries") or []
+                        if not entries:
+                            raise RuntimeError("No search result entries")
+                        info = entries[0]
+
+                    webpage_url = info.get("webpage_url") or info.get("url")
+                    title = info.get("title") or "Unknown Title"
+                    if not webpage_url:
+                        raise RuntimeError("Could not resolve webpage url")
+
+                    detailed = ydl.extract_info(webpage_url, download=False)
+                    if not detailed:
+                        raise RuntimeError("Could not resolve stream info")
+                    stream_url = self._pick_stream_url(detailed)
+                    if not stream_url:
+                        raise RuntimeError("Could not resolve audio stream url (no playable format)")
+
+                    return VCTrack(
+                        title=title[:120],
+                        webpage_url=webpage_url,
+                        stream_url=stream_url,
+                        requested_by=requested_by,
+                    )
             except Exception as e:
                 err = str(e)
                 if "Sign in to confirm you’re not a bot" in err or "Sign in to confirm you're not a bot" in err:
@@ -258,42 +296,15 @@ class VCManager:
                         "YouTube blocked anonymous extraction for this track. "
                         "Set YTDLP_COOKIES (Netscape cookies text) or YTDLP_COOKIE_FILE in Railway vars, then redeploy."
                     ) from e
-                raise
-            if not info:
-                raise RuntimeError("No track found")
-            if "entries" in info:
-                entries = info.get("entries") or []
-                if not entries:
-                    raise RuntimeError("No search result entries")
-                info = entries[0]
+                last_error = e
+                # Keep trying next format profile for format-specific failures.
+                if "Requested format is not available" in err:
+                    continue
+                continue
 
-            webpage_url = info.get("webpage_url") or info.get("url")
-            title = info.get("title") or "Unknown Title"
-            if not webpage_url:
-                raise RuntimeError("Could not resolve webpage url")
-
-            try:
-                detailed = ydl.extract_info(webpage_url, download=False)
-            except Exception as e:
-                err = str(e)
-                if "Sign in to confirm you’re not a bot" in err or "Sign in to confirm you're not a bot" in err:
-                    raise RuntimeError(
-                        "YouTube blocked anonymous extraction for this track. "
-                        "Set YTDLP_COOKIES (Netscape cookies text) or YTDLP_COOKIE_FILE in Railway vars, then redeploy."
-                    ) from e
-                raise
-            if not detailed:
-                raise RuntimeError("Could not resolve stream info")
-            stream_url = self._pick_stream_url(detailed)
-            if not stream_url:
-                raise RuntimeError("Could not resolve audio stream url (no playable format)")
-
-            return VCTrack(
-                title=title[:120],
-                webpage_url=webpage_url,
-                stream_url=stream_url,
-                requested_by=requested_by,
-            )
+        if last_error:
+            raise RuntimeError(f"Could not resolve stream: {last_error}") from last_error
+        raise RuntimeError("Could not resolve stream")
 
     async def resolve_track(self, query: str, requested_by: str) -> VCTrack:
         return await asyncio.to_thread(self._resolve_track_sync, query, requested_by)
