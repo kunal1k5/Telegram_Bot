@@ -226,9 +226,11 @@ class VCManager:
         except Exception as e:
             # Strict handling: only treat "not participant" as recoverable.
             try:
-                from pyrogram.errors import UserNotParticipant
+                from pyrogram.errors import PeerIdInvalid, UserNotParticipant
 
                 if isinstance(e, UserNotParticipant):
+                    return False
+                if isinstance(e, PeerIdInvalid):
                     return False
             except Exception:
                 pass
@@ -606,26 +608,39 @@ class VCManager:
         return url
 
     async def _start_or_replace_stream(self, chat_id: int, state: VCChatState, track: VCTrack) -> None:
-        stream = self._make_input_stream(track.stream_url)
+        async def _attempt_once() -> None:
+            stream = self._make_input_stream(track.stream_url)
+            if state.active_call:
+                if self._supports_change_api:
+                    await self._calls.change_stream(chat_id, stream)
+                elif self._supports_play_api:
+                    await self._calls.play(chat_id, stream)
+                elif self._supports_join_api:
+                    await self._calls.join_group_call(chat_id, stream)
+                else:
+                    raise RuntimeError("VC backend does not support stream replacement.")
+                return
 
-        if state.active_call:
-            if self._supports_change_api:
-                await self._calls.change_stream(chat_id, stream)
-            elif self._supports_play_api:
-                await self._calls.play(chat_id, stream)
-            elif self._supports_join_api:
+            if self._supports_join_api:
                 await self._calls.join_group_call(chat_id, stream)
-            else:
-                raise RuntimeError("VC backend does not support stream replacement.")
-            return
+                return
+            if self._supports_play_api:
+                await self._calls.play(chat_id, stream)
+                return
+            raise RuntimeError("Could not start stream: unsupported VC backend API.")
 
-        if self._supports_join_api:
-            await self._calls.join_group_call(chat_id, stream)
+        try:
+            await _attempt_once()
             return
-        if self._supports_play_api:
-            await self._calls.play(chat_id, stream)
-            return
-        raise RuntimeError("Could not start stream: unsupported VC backend API.")
+        except Exception as e:
+            # One-time peer refresh retry for transient PeerIdInvalid.
+            if "peer id invalid" not in str(e).lower():
+                raise
+            try:
+                await self._assistant.get_chat(chat_id)
+            except Exception:
+                pass
+            await _attempt_once()
 
     def _mark_track_started(self, chat_id: int, state: VCChatState, track: VCTrack) -> None:
         state.play_serial += 1
