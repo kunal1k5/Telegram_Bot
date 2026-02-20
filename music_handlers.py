@@ -1,5 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+import asyncio
 import json
 import random
 from pathlib import Path
@@ -22,6 +23,7 @@ class MusicHandlers:
             "glass": "Glass",
             "minimal": "Minimal",
         }
+        self._panel_update_tasks: dict[int, asyncio.Task] = {}
         self._load_theme_prefs()
 
     def _load_theme_prefs(self) -> None:
@@ -121,6 +123,7 @@ class MusicHandlers:
         requested_by: str,
         download_mode: bool = False,
         chat_id: Optional[int] = None,
+        elapsed_seconds: int = 0,
     ) -> str:
         mode_badge = " [DOWNLOAD MODE]" if download_mode else ""
         duration_seconds = getattr(track, "duration", None)
@@ -129,7 +132,7 @@ class MusicHandlers:
         requester = self._safe_requester(requested_by)
         theme = self._get_theme(chat_id)
         theme_name = self._theme_labels.get(theme, "Rose")
-        progress = self._progress_line(duration_seconds, width=16).replace(" ○", " ◉")
+        progress = self._progress_line(duration_seconds, elapsed_seconds=elapsed_seconds, width=16).replace(" ○", " ◉")
 
         if theme == "glass":
             return (
@@ -231,11 +234,67 @@ class MusicHandlers:
 
         return "\n".join(lines)
 
-    async def _edit_callback_message(self, query: CallbackQuery, text: str, reply_markup: Optional[InlineKeyboardMarkup] = None) -> None:
+    async def _edit_callback_message(
+        self, query: CallbackQuery, text: str, reply_markup: Optional[InlineKeyboardMarkup] = None
+    ) -> None:
         if query.message and query.message.photo:
             await query.edit_message_caption(caption=text, reply_markup=reply_markup)
         else:
             await query.edit_message_text(text=text, reply_markup=reply_markup)
+
+    def _cancel_panel_updater(self, chat_id: int) -> None:
+        task = self._panel_update_tasks.pop(chat_id, None)
+        if task and not task.done():
+            task.cancel()
+
+    def _start_panel_updater(
+        self,
+        chat_id: int,
+        panel_message: Message,
+        get_vc_manager: Callable[[], Awaitable[Any]],
+    ) -> None:
+        self._cancel_panel_updater(chat_id)
+
+        async def _worker() -> None:
+            try:
+                while True:
+                    await asyncio.sleep(10)
+                    vc = await get_vc_manager()
+                    now_track = vc.get_now_playing(chat_id)
+                    if not now_track:
+                        break
+
+                    elapsed = 0
+                    try:
+                        elapsed = vc.get_elapsed_seconds(chat_id)
+                    except Exception:
+                        elapsed = 0
+
+                    caption = self.vc_now_playing_card(
+                        now_track,
+                        now_track.requested_by,
+                        download_mode=getattr(now_track, "is_local", False),
+                        chat_id=chat_id,
+                        elapsed_seconds=elapsed,
+                    )
+                    keyboard = self.vc_player_keyboard(chat_id, vc.is_paused(chat_id))
+                    try:
+                        if panel_message.photo:
+                            await panel_message.edit_caption(caption=caption, reply_markup=keyboard)
+                        else:
+                            await panel_message.edit_text(text=caption, reply_markup=keyboard)
+                    except Exception as e:
+                        if "message is not modified" in str(e).lower():
+                            continue
+                        break
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                return
+            finally:
+                self._panel_update_tasks.pop(chat_id, None)
+
+        self._panel_update_tasks[chat_id] = asyncio.create_task(_worker())
 
     async def send_vc_player_card(
         self,
@@ -246,26 +305,34 @@ class MusicHandlers:
         download_mode: bool,
         get_vc_manager: Callable[[], Awaitable[Any]],
     ) -> None:
-        caption = self.vc_now_playing_card(track, requested_by, download_mode=download_mode)
         vc = await get_vc_manager()
         chat_id = update.effective_chat.id
-        caption = self.vc_now_playing_card(track, requested_by, download_mode=download_mode, chat_id=chat_id)
+        caption = self.vc_now_playing_card(
+            track,
+            requested_by,
+            download_mode=download_mode,
+            chat_id=chat_id,
+            elapsed_seconds=vc.get_elapsed_seconds(chat_id),
+        )
         keyboard = self.vc_player_keyboard(chat_id, vc.is_paused(chat_id))
         thumb = getattr(track, "thumbnail", None)
+        panel_message: Optional[Message] = None
 
         try:
             if thumb:
                 await status_message.delete()
-                await update.effective_message.reply_photo(
+                panel_message = await update.effective_message.reply_photo(
                     photo=thumb,
                     caption=caption,
                     reply_markup=keyboard,
                 )
+                self._start_panel_updater(chat_id, panel_message, get_vc_manager)
                 return
         except Exception:
             pass
 
-        await status_message.edit_text(caption, reply_markup=keyboard)
+        panel_message = await status_message.edit_text(caption, reply_markup=keyboard)
+        self._start_panel_updater(chat_id, panel_message, get_vc_manager)
 
     async def update_vc_player_callback_message(
         self,
@@ -302,6 +369,7 @@ class MusicHandlers:
             chat_id = update.effective_chat.id
             await vc.stop_chat(chat_id)
             self.loop_enabled_chats.discard(chat_id)
+            self._cancel_panel_updater(chat_id)
             await update.effective_message.reply_text("⏹ Voice chat playback stopped and queue cleared.")
         except Exception as e:
             await update.effective_message.reply_text(f"VC stop failed: {e}")
@@ -326,6 +394,7 @@ class MusicHandlers:
 
             next_track = await vc.skip(chat_id)
             if not next_track:
+                self._cancel_panel_updater(chat_id)
                 await update.effective_message.reply_text("Queue empty. Stopped current playback.")
                 return
 
@@ -426,6 +495,7 @@ class MusicHandlers:
                     vc.queues.setdefault(chat_id, []).append(now_track)
                 next_track = await vc.skip(chat_id)
                 if not next_track:
+                    self._cancel_panel_updater(chat_id)
                     try:
                         await self._edit_callback_message(query, "⏹ Playback stopped. Queue is empty.")
                     except Exception:
@@ -439,6 +509,7 @@ class MusicHandlers:
             if action == "stop":
                 await vc.stop_chat(chat_id)
                 self.loop_enabled_chats.discard(chat_id)
+                self._cancel_panel_updater(chat_id)
                 try:
                     await self._edit_callback_message(query, "⏹ Playback stopped and queue cleared.")
                 except Exception:
@@ -497,6 +568,7 @@ class MusicHandlers:
                 try:
                     await vc.stop_chat(chat_id)
                     self.loop_enabled_chats.discard(chat_id)
+                    self._cancel_panel_updater(chat_id)
                     if query.message:
                         await query.message.delete()
                     await query.answer("VC closed")

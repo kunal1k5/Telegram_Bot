@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import tempfile
+import time
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -50,6 +51,9 @@ class VCManager:
         self._auto_tasks: dict[int, asyncio.Task] = {}
         self._play_tokens: dict[int, int] = {}
         self._paused_chats: set[int] = set()
+        self._track_started_at: dict[int, float] = {}
+        self._paused_total_seconds: dict[int, float] = {}
+        self._pause_started_at: dict[int, float] = {}
         self._default_track_seconds = int(os.getenv("VC_DEFAULT_TRACK_SECONDS", "240"))
         self._stream_end_handler_registered = False
 
@@ -348,6 +352,9 @@ class VCManager:
         self._cancel_auto_task(chat_id)
         self._play_tokens.pop(chat_id, None)
         self._paused_chats.discard(chat_id)
+        self._track_started_at.pop(chat_id, None)
+        self._paused_total_seconds.pop(chat_id, None)
+        self._pause_started_at.pop(chat_id, None)
         self.active_calls.discard(chat_id)
         stale_track = self.now_playing.pop(chat_id, None)
         self._cleanup_track_file(stale_track)
@@ -723,6 +730,10 @@ class VCManager:
                 raise RuntimeError(f"Could not start stream: {e}") from e
             self.active_calls.add(chat_id)
             self.now_playing[chat_id] = track
+            self._track_started_at[chat_id] = time.monotonic()
+            self._paused_total_seconds[chat_id] = 0.0
+            self._pause_started_at.pop(chat_id, None)
+            self._paused_chats.discard(chat_id)
             self._schedule_auto_advance(chat_id, track, token)
             return
 
@@ -736,6 +747,10 @@ class VCManager:
                 await self._calls.join_group_call(chat_id, stream)
                 self.active_calls.add(chat_id)
                 self.now_playing[chat_id] = track
+                self._track_started_at[chat_id] = time.monotonic()
+                self._paused_total_seconds[chat_id] = 0.0
+                self._pause_started_at.pop(chat_id, None)
+                self._paused_chats.discard(chat_id)
                 self._schedule_auto_advance(chat_id, track, token)
                 return
             except Exception:
@@ -751,6 +766,9 @@ class VCManager:
 
         self.active_calls.add(chat_id)
         self.now_playing[chat_id] = track
+        self._track_started_at[chat_id] = time.monotonic()
+        self._paused_total_seconds[chat_id] = 0.0
+        self._pause_started_at.pop(chat_id, None)
         self._paused_chats.discard(chat_id)
         self._schedule_auto_advance(chat_id, track, token)
 
@@ -860,6 +878,9 @@ class VCManager:
             self.history.pop(chat_id, None)
             self.now_playing.pop(chat_id, None)
             self.active_calls.discard(chat_id)
+            self._track_started_at.pop(chat_id, None)
+            self._paused_total_seconds.pop(chat_id, None)
+            self._pause_started_at.pop(chat_id, None)
             return
         try:
             await self._calls.leave_group_call(chat_id)
@@ -869,6 +890,9 @@ class VCManager:
         self.history.pop(chat_id, None)
         self.now_playing.pop(chat_id, None)
         self.active_calls.discard(chat_id)
+        self._track_started_at.pop(chat_id, None)
+        self._paused_total_seconds.pop(chat_id, None)
+        self._pause_started_at.pop(chat_id, None)
         self._cleanup_track_file(old_track)
         for item in queued_tracks:
             self._cleanup_track_file(item)
@@ -885,6 +909,7 @@ class VCManager:
             await self._calls.pause(chat_id)
         else:
             raise RuntimeError("Pause not supported by current VC backend")
+        self._pause_started_at.setdefault(chat_id, time.monotonic())
         self._paused_chats.add(chat_id)
 
     async def resume_chat(self, chat_id: int) -> None:
@@ -896,6 +921,11 @@ class VCManager:
             await self._calls.resume(chat_id)
         else:
             raise RuntimeError("Resume not supported by current VC backend")
+        pause_started = self._pause_started_at.pop(chat_id, None)
+        if pause_started is not None:
+            self._paused_total_seconds[chat_id] = self._paused_total_seconds.get(chat_id, 0.0) + max(
+                0.0, time.monotonic() - pause_started
+            )
         self._paused_chats.discard(chat_id)
         now_track = self.now_playing.get(chat_id)
         token = self._play_tokens.get(chat_id, 0)
@@ -910,3 +940,16 @@ class VCManager:
 
     def get_now_playing(self, chat_id: int) -> Optional[VCTrack]:
         return self.now_playing.get(chat_id)
+
+    def get_elapsed_seconds(self, chat_id: int) -> int:
+        start = self._track_started_at.get(chat_id)
+        if not start:
+            return 0
+        paused_total = self._paused_total_seconds.get(chat_id, 0.0)
+        if chat_id in self._paused_chats:
+            pause_started = self._pause_started_at.get(chat_id)
+            now = pause_started if pause_started else time.monotonic()
+        else:
+            now = time.monotonic()
+        elapsed = int(max(0.0, (now - start) - paused_total))
+        return elapsed
