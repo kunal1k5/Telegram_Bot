@@ -1027,6 +1027,18 @@ MUSIC_HANDLERS = MusicHandlers(OWNER_USERNAME, CHANNEL_USERNAME)
 
 # ========================= GEMINI AI HELPER ========================= #
 
+def _build_group_style_system_prompt(user_lang: str) -> str:
+    """Compose group-style prompt with language steering."""
+    base_prompt = MUSIC_HANDLERS.get_group_style_system_prompt()
+    lang_instruction = f"\n[User language: {user_lang.upper()}]"
+    if user_lang == "english":
+        lang_instruction += " Reply ONLY in English."
+    elif user_lang == "hinglish":
+        lang_instruction += " Reply in Hinglish."
+    else:
+        lang_instruction += " Reply in the same language used by the user message."
+    return base_prompt + lang_instruction
+
 def _repair_mojibake_text(text: str) -> str:
     """Best-effort fix for common mojibake in outgoing text."""
     if not text:
@@ -5748,15 +5760,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         user_lang = LANGUAGE_PREFERENCES.get(user_id) or BOT_DB.get_user_language(user_id)
         if user_lang not in {"english", "hinglish", "auto"}:
             user_lang = "auto"
-        lang_instruction = f"\n[User language: {user_lang.upper()}]"
-        if user_lang == "english":
-            lang_instruction += " Reply ONLY in English."
-        elif user_lang == "hinglish":
-            lang_instruction += " Reply in Hinglish."
-        else:
-            lang_instruction += " Reply in the same language used by the user message."
-        
-        system_prompt_with_lang = SYSTEM_PROMPT + lang_instruction
+        system_prompt_with_lang = _build_group_style_system_prompt(user_lang)
         # Tool-intent short-circuit for group AI triggers
         intent = _detect_intent(message_text)
         tool_reply = await _handle_tool_intent(intent, message_text, user_id, group_id)

@@ -11,6 +11,34 @@ from telegram.constants import ChatType
 
 
 class MusicHandlers:
+    GROUP_STYLE_SYSTEM_PROMPT = """You are a real member of this Telegram group (not an assistant voice).
+Match this group style exactly.
+
+Style rules:
+- Speak in short Hinglish one-liners (Roman Hindi + simple English).
+- Keep replies mostly 2-10 words.
+- Use casual slang naturally: bhai, didi, acha, hmm, kya, nhi, yrr, abey.
+- Energy should be quick and reactive, like live group chat.
+- Tone is friendly-playful with occasional light savage roast (never toxic hate).
+- Emoji usage is moderate-light: use emojis in roughly 1 out of 10 replies.
+- Preferred emojis: 😂 😁 👀 🥺 😑 🤨 😱 😎
+- Never sound formal, robotic, or over-explanatory.
+- Keep Telegram vibe: punchy lines, natural pauses, and short chat replies.
+- If relevant, lightly reference group inside jokes (anime refs like Naruto/Hinata/Kakashi) without forcing it.
+- Do not expose private personal data from chat history.
+
+Behavior:
+- If user asks for music action, respond in group tone and confirm action briefly.
+- If uncertain, ask a short follow-up in group tone.
+- Stay human-like, concise, and natural."""
+
+    GROUP_STYLE_EXAMPLES = [
+        ("kya scene hai", "full josh bhai 😎"),
+        ("gaana chala", "turant laga deta hu 🎧"),
+        ("kya hua", "abey kuch nahi, chill 😑"),
+        ("itna shaant kyu", "sab ghost mode me hain kya 👀"),
+    ]
+
     def __init__(self, owner_username: str, channel_username: str) -> None:
         self.owner_username = owner_username
         self.channel_username = channel_username
@@ -108,6 +136,32 @@ class MusicHandlers:
             return "rose"
         theme = self.chat_theme.get(chat_id, "rose")
         return theme if theme in self._themes else "rose"
+
+    @classmethod
+    def get_group_style_system_prompt(cls) -> str:
+        return cls.GROUP_STYLE_SYSTEM_PROMPT
+
+    @classmethod
+    def build_group_style_prompt(cls, user_message: str, include_examples: bool = True) -> str:
+        prompt = [cls.GROUP_STYLE_SYSTEM_PROMPT]
+        if include_examples:
+            prompt.append("\nExample conversation style:")
+            for user_text, bot_text in cls.GROUP_STYLE_EXAMPLES:
+                prompt.append(f"User: {user_text}")
+                prompt.append(f"Bot: {bot_text}")
+        prompt.append("\nNow reply in same style to this message:")
+        prompt.append((user_message or "").strip())
+        return "\n".join(prompt)
+
+    @classmethod
+    def build_group_style_messages(cls, user_message: str, include_examples: bool = True) -> List[dict[str, str]]:
+        messages: List[dict[str, str]] = [{"role": "system", "content": cls.GROUP_STYLE_SYSTEM_PROMPT}]
+        if include_examples:
+            for user_text, bot_text in cls.GROUP_STYLE_EXAMPLES:
+                messages.append({"role": "user", "content": user_text})
+                messages.append({"role": "assistant", "content": bot_text})
+        messages.append({"role": "user", "content": (user_message or "").strip()})
+        return messages
 
     def _cycle_theme(self, chat_id: int) -> str:
         current = self._get_theme(chat_id)
