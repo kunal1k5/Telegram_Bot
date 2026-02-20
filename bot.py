@@ -4715,6 +4715,44 @@ async def vcguide_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await update.effective_message.reply_text(guide_text)
 
 
+async def _ensure_vc_assistant(
+    context: ContextTypes.DEFAULT_TYPE,
+    vc: VCManager,
+    chat_id: int,
+) -> tuple[int, str]:
+    """Ensure assistant membership once per chat with strict recovery behavior."""
+    assistant_id, assistant_username = await vc.get_assistant_identity()
+    if not assistant_id:
+        raise RuntimeError(
+            "Assistant identity not available from session. "
+            "Regenerate ASSISTANT_SESSION and redeploy."
+        )
+
+    is_present = await vc.verify_assistant_once(chat_id)
+    if is_present:
+        VC_ASSISTANT_PRESENT_CACHE[chat_id] = time.time()
+        return assistant_id, (assistant_username or "")
+
+    # Recover only for true 'not participant' case (verify_assistant_once returned False).
+    invite = await context.bot.create_chat_invite_link(
+        chat_id=chat_id,
+        name="VC Assistant Auto Join",
+        member_limit=1,
+        creates_join_request=False,
+    )
+    await vc.join_chat_via_invite(invite.invite_link)
+    await asyncio.sleep(1.5)
+
+    if not await vc.verify_assistant_once(chat_id):
+        raise RuntimeError(
+            "Assistant could not join this chat. "
+            "Check ban status and bot invite permissions."
+        )
+
+    VC_ASSISTANT_PRESENT_CACHE[chat_id] = time.time()
+    return assistant_id, (assistant_username or "")
+
+
 async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Play music in Telegram voice chat using assistant + PyTgCalls."""
     await _register_user_from_update(update)
@@ -4735,102 +4773,9 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         vc = await _get_vc_manager()
         chat_id = update.effective_chat.id
 
-        assistant_id, assistant_username = await vc.get_assistant_identity()
         requested_by = update.effective_user.first_name or "User"
-        assistant_mention = (
-            f"@{assistant_username}" if assistant_username else "configured assistant account"
-        )
-
-        def _assistant_help_text(reason: str, is_banned: bool = False) -> str:
-            base_lines = [
-                "Assistant could not be prepared for VC playback.",
-                "",
-                f"Reason: {reason}",
-                "",
-                f"Assistant: {assistant_mention}",
-            ]
-            if assistant_id:
-                base_lines.append(f"ID: {assistant_id}")
-            if is_banned and assistant_id:
-                base_lines.extend(
-                    [
-                        "",
-                        f"Please use: /unban {assistant_id}",
-                        "Then try /play again.",
-                    ]
-                )
-            else:
-                base_lines.extend(
-                    [
-                        "",
-                        "If assistant is banned, unban it.",
-                        "Also ensure bot has Invite Users via Link permission.",
-                    ]
-                )
-            return "\n".join(base_lines)
-
-        async def _recover_assistant_membership() -> None:
-            if not assistant_id:
-                raise RuntimeError(
-                    "Assistant identity not available from session. "
-                    "Regenerate ASSISTANT_SESSION and redeploy."
-                )
-            # If assistant is blocked/banned, unban first.
-            try:
-                await context.bot.unban_chat_member(chat_id=chat_id, user_id=assistant_id)
-            except Exception:
-                pass
-            invite = await context.bot.create_chat_invite_link(
-                chat_id=chat_id,
-                name="VC Assistant Auto Join",
-                member_limit=1,
-                creates_join_request=False,
-            )
-            await vc.join_chat_via_invite(invite.invite_link)
-            await asyncio.sleep(1.5)
-
-        try:
-            # Direct play first: if assistant is already in group, this avoids any unnecessary re-add flow.
-            mode, track = await vc.enqueue_or_play(chat_id, query, requested_by)
-        except Exception as play_exc:
-            play_err = str(play_exc).lower()
-            recoverable_markers = (
-                "peer id invalid",
-                "user not participant",
-                "participant_id_invalid",
-                "chat_admin_required",
-                "not in the chat",
-            )
-            if any(marker in play_err for marker in recoverable_markers):
-                try:
-                    VC_ASSISTANT_PRESENT_CACHE.pop(chat_id, None)
-                    await _recover_assistant_membership()
-                    mode, track = await vc.enqueue_or_play(chat_id, query, requested_by)
-                except Exception as retry_exc:
-                    retry_text = str(retry_exc).lower()
-                    banned_markers = ("banned", "kicked", "blocked", "user_deactivated_ban")
-                    if any(marker in retry_text for marker in banned_markers):
-                        raise RuntimeError(
-                            _assistant_help_text(
-                                "Assistant is banned/blocked in this group.",
-                                is_banned=True,
-                            )
-                        ) from retry_exc
-                    if "not enough rights" in retry_text or "administrator" in retry_text or "invite" in retry_text:
-                        raise RuntimeError(
-                            _assistant_help_text(
-                                "Bot lacks invite/admin permission to auto-add assistant."
-                            )
-                        ) from retry_exc
-                    raise RuntimeError(
-                        _assistant_help_text(
-                            f"Automatic assistant join failed ({type(retry_exc).__name__})."
-                        )
-                    ) from retry_exc
-            else:
-                raise
-
-        VC_ASSISTANT_PRESENT_CACHE[chat_id] = time.time()
+        await _ensure_vc_assistant(context, vc, chat_id)
+        mode, track = await vc.enqueue_or_play(chat_id, query, requested_by)
 
         if mode == "playing":
             await _send_vc_player_card(update, context, status_msg, track, requested_by)
@@ -4860,16 +4805,15 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 f"Error: {err}"
             ),
         )
-        non_fallback_markers = [
-            "vc config missing",
-            "invalid assistant_session",
-            "assistant login failed",
-            "unsupported pytgcalls api",
-            "not enough rights",
-            "administrator",
-            "invite",
+        err_l = err.lower()
+        stream_resolve_markers = [
+            "could not resolve stream",
+            "could not resolve track",
+            "requested format is not available",
+            "youtube blocked anonymous extraction",
+            "download fallback failed",
         ]
-        if not any(marker in err.lower() for marker in non_fallback_markers):
+        if any(marker in err_l for marker in stream_resolve_markers):
             try:
                 await status_msg.edit_text(
                     "VC stream unavailable. Trying download-mode VC playback..."
