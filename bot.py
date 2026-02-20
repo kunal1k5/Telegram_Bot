@@ -11,6 +11,7 @@ import re
 import ast
 import operator
 import sys
+import html
 from pathlib import Path
 from importlib.metadata import PackageNotFoundError, version
 from typing import Final, Dict, List, Tuple, Optional, Set, Any
@@ -88,6 +89,7 @@ CHANNEL_USERNAME: Final[str] = "@AnimxClan_Channel"
 LOG_CHANNEL_USERNAME: Final[str] = os.getenv("LOG_CHANNEL_USERNAME", CHANNEL_USERNAME)
 LOG_CHANNEL_ID: Final[int] = int(os.getenv("LOG_CHANNEL_ID", "0"))
 ENABLE_USAGE_LOGS: Final[bool] = os.getenv("ENABLE_USAGE_LOGS", "true").lower() == "true"
+CHAT_EXPORT_DIR_ENV: Final[str] = os.getenv("CHAT_EXPORT_DIR", "").strip()
 
 # Admin ID (Bot owner for broadcasts)
 ADMIN_ID: Final[int] = int(os.getenv("ADMIN_ID", "7971841264"))
@@ -993,6 +995,7 @@ HELP_TEXT: Final[str] = (
     "/broadcastsong <name> - Broadcast a song\n"
     "/dashboard - Live analytics\n"
     "/channelstats - Send past/present usage report\n"
+    "/reloadstyle - Reload chat export style data\n"
     "/users - List users\n"
     "/groups - List groups\n\n"
     "\u2699\uFE0F Voice Chat Notes\n"
@@ -1024,12 +1027,428 @@ VC_MANAGER: Optional[VCManager] = None
 VC_LOCK = asyncio.Lock()
 VC_ASSISTANT_PRESENT_CACHE: Dict[int, float] = {}
 MUSIC_HANDLERS = MusicHandlers(OWNER_USERNAME, CHANNEL_USERNAME)
+CHAT_STYLE_EXPORT_PROFILE: Dict[str, Any] = {
+    "source_dirs": [],
+    "source_files": [],
+    "example_pairs": [],
+    "short_lines": [],
+    "sticker_paths": [],
+    "gif_paths": [],
+    "image_paths": [],
+}
+
+
+def _discover_chat_export_dirs() -> list[Path]:
+    """Find one or multiple chat export directories from env and default location."""
+    dirs: list[Path] = []
+    seen: set[str] = set()
+
+    # Support multiple explicit dirs via ; or ,
+    if CHAT_EXPORT_DIR_ENV:
+        raw_parts = re.split(r"[;,]", CHAT_EXPORT_DIR_ENV)
+        for raw_part in raw_parts:
+            part = raw_part.strip().strip('"').strip("'")
+            if not part:
+                continue
+            candidate = Path(part)
+            if candidate.exists() and candidate.is_dir():
+                key = str(candidate.resolve()).lower()
+                if key not in seen:
+                    seen.add(key)
+                    dirs.append(candidate)
+
+    desktop_exports = Path.home() / "Downloads" / "Telegram Desktop"
+    if desktop_exports.exists():
+        candidates = sorted(
+            [p for p in desktop_exports.glob("ChatExport_*") if p.is_dir()],
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for candidate in candidates:
+            key = str(candidate.resolve()).lower()
+            if key not in seen:
+                seen.add(key)
+                dirs.append(candidate)
+    return dirs
+
+
+def _clean_export_html_text(raw_html: str) -> str:
+    text = raw_html or ""
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html.unescape(text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _extract_export_messages(html_text: str) -> list[dict[str, Any]]:
+    """Extract text/media messages from Telegram export HTML with lightweight regex parsing."""
+    starts = list(re.finditer(r'<div class="message [^"]*" id="message(\d+)"', html_text))
+    if not starts:
+        return []
+
+    messages: list[dict[str, Any]] = []
+    last_sender = ""
+
+    for i, match in enumerate(starts):
+        block_start = match.start()
+        block_end = starts[i + 1].start() if i + 1 < len(starts) else len(html_text)
+        block = html_text[block_start:block_end]
+        block_id = int(match.group(1))
+
+        if 'class="message service"' in block:
+            continue
+
+        sender_match = re.search(r'<div class="from_name">\s*(.*?)\s*</div>', block, flags=re.S)
+        sender = _clean_export_html_text(sender_match.group(1)) if sender_match else last_sender
+        if sender:
+            last_sender = sender
+
+        text_match = re.search(r'<div class="text">\s*(.*?)\s*</div>', block, flags=re.S)
+        text = _clean_export_html_text(text_match.group(1)) if text_match else ""
+        if text.startswith("/"):
+            text = ""
+
+        reply_to_match = re.search(r'go_to_message(\d+)', block)
+        reply_to = int(reply_to_match.group(1)) if reply_to_match else None
+
+        media_refs = re.findall(r'href="([^"]+)"', block)
+        media_paths = [
+            m
+            for m in media_refs
+            if m.startswith("stickers/")
+            or m.startswith("video_files/")
+            or m.startswith("photos/")
+            or m.startswith("files/")
+        ]
+
+        messages.append(
+            {
+                "id": block_id,
+                "sender": sender,
+                "text": text,
+                "reply_to": reply_to,
+                "media_paths": media_paths,
+            }
+        )
+
+    return messages
+
+
+def _build_chat_style_profile(export_dirs: list[Path]) -> Dict[str, Any]:
+    html_files: list[Path] = []
+    for export_dir in export_dirs:
+        html_files.extend(sorted(export_dir.glob("messages*.html")))
+
+    profile: Dict[str, Any] = {
+        "source_dirs": [str(p) for p in export_dirs],
+        "source_files": [str(p) for p in html_files],
+        "example_pairs": [],
+        "short_lines": [],
+        "sticker_paths": [],
+        "gif_paths": [],
+        "image_paths": [],
+    }
+    if not html_files:
+        return profile
+
+    all_messages: list[dict[str, Any]] = []
+    for html_file in html_files:
+        try:
+            raw = html_file.read_text(encoding="utf-8", errors="ignore")
+            parsed_messages = _extract_export_messages(raw)
+            for parsed in parsed_messages:
+                parsed["origin_dir"] = str(html_file.parent)
+            all_messages.extend(parsed_messages)
+        except Exception as e:
+            logger.warning(f"Could not parse export file {html_file}: {e}")
+
+    message_by_id = {m["id"]: m for m in all_messages}
+    example_pairs: list[tuple[str, str]] = []
+    short_lines: list[str] = []
+
+    for idx, msg in enumerate(all_messages):
+        text = (msg.get("text") or "").strip()
+        sender = (msg.get("sender") or "").strip()
+        if text and 1 <= len(text) <= 60:
+            short_lines.append(text)
+
+        # Prefer actual reply chains from export.
+        reply_to = msg.get("reply_to")
+        if reply_to and text:
+            src = message_by_id.get(reply_to)
+            if src:
+                src_text = (src.get("text") or "").strip()
+                src_sender = (src.get("sender") or "").strip()
+                if (
+                    src_text
+                    and src_sender
+                    and sender
+                    and src_sender.lower() != sender.lower()
+                    and len(src_text) <= 120
+                    and len(text) <= 120
+                ):
+                    example_pairs.append((src_text, text))
+                    continue
+
+        # Fallback to adjacent turn from different sender.
+        if idx > 0 and text:
+            prev = all_messages[idx - 1]
+            prev_text = (prev.get("text") or "").strip()
+            prev_sender = (prev.get("sender") or "").strip()
+            if (
+                prev_text
+                and prev_sender
+                and sender
+                and prev_sender.lower() != sender.lower()
+                and len(prev_text) <= 120
+                and len(text) <= 120
+            ):
+                example_pairs.append((prev_text, text))
+
+        for rel_media_path in msg.get("media_paths") or []:
+            origin_dir = msg.get("origin_dir")
+            media_base = Path(origin_dir) if origin_dir else None
+            if media_base is None or not media_base.exists():
+                media_base = export_dirs[0] if export_dirs else None
+            if media_base is None:
+                continue
+            media_path = media_base / rel_media_path.replace("/", os.sep)
+            if not media_path.exists():
+                continue
+            lower_name = media_path.name.lower()
+            ext = media_path.suffix.lower()
+            if ext in {".webp", ".tgs", ".webm"} or "sticker" in lower_name:
+                profile["sticker_paths"].append(str(media_path))
+            if ext in {".gif", ".mp4", ".webm"}:
+                profile["gif_paths"].append(str(media_path))
+            if ext in {".jpg", ".jpeg", ".png", ".webp"} and "sticker" not in lower_name:
+                profile["image_paths"].append(str(media_path))
+
+    # Media scan from folders for robust pool.
+    for export_dir in export_dirs:
+        sticker_dir = export_dir / "stickers"
+        video_dir = export_dir / "video_files"
+        photo_dir = export_dir / "photos"
+
+        if sticker_dir.exists():
+            for p in sticker_dir.rglob("*"):
+                if not p.is_file():
+                    continue
+                ext = p.suffix.lower()
+                if ext in {".webp", ".tgs", ".webm"}:
+                    profile["sticker_paths"].append(str(p))
+                elif ext in {".jpg", ".jpeg", ".png"}:
+                    profile["image_paths"].append(str(p))
+
+        if video_dir.exists():
+            for p in video_dir.rglob("*"):
+                if not p.is_file():
+                    continue
+                ext = p.suffix.lower()
+                if ext == ".webm" and "sticker" in p.name.lower():
+                    profile["sticker_paths"].append(str(p))
+                if ext in {".webm", ".mp4", ".gif"}:
+                    profile["gif_paths"].append(str(p))
+
+        if photo_dir.exists():
+            for p in photo_dir.rglob("*"):
+                if not p.is_file():
+                    continue
+                if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
+                    profile["image_paths"].append(str(p))
+
+    # Keep prompt compact and recent.
+    dedup_pairs: list[tuple[str, str]] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    for a, b in reversed(example_pairs):
+        key = (a.lower(), b.lower())
+        if key in seen_pairs:
+            continue
+        seen_pairs.add(key)
+        dedup_pairs.append((a, b))
+        if len(dedup_pairs) >= 24:
+            break
+    dedup_pairs.reverse()
+
+    dedup_lines: list[str] = []
+    seen_lines: set[str] = set()
+    for line in reversed(short_lines):
+        key = line.lower()
+        if key in seen_lines:
+            continue
+        seen_lines.add(key)
+        dedup_lines.append(line)
+        if len(dedup_lines) >= 40:
+            break
+    dedup_lines.reverse()
+
+    profile["example_pairs"] = dedup_pairs
+    profile["short_lines"] = dedup_lines
+    profile["sticker_paths"] = sorted(set(profile["sticker_paths"]))
+    profile["gif_paths"] = sorted(set(profile["gif_paths"]))
+    profile["image_paths"] = sorted(set(profile["image_paths"]))
+    return profile
+
+
+def _load_chat_style_profile() -> None:
+    global CHAT_STYLE_EXPORT_PROFILE
+    export_dirs = _discover_chat_export_dirs()
+    if not export_dirs:
+        logger.info("Chat export directory not found. Running with default personality only.")
+        return
+    try:
+        CHAT_STYLE_EXPORT_PROFILE = _build_chat_style_profile(export_dirs)
+        logger.info(
+            "Loaded chat export style profile: dirs=%d, files=%d, pairs=%d, lines=%d, stickers=%d, gifs=%d, images=%d",
+            len(CHAT_STYLE_EXPORT_PROFILE.get("source_dirs", [])),
+            len(CHAT_STYLE_EXPORT_PROFILE.get("source_files", [])),
+            len(CHAT_STYLE_EXPORT_PROFILE.get("example_pairs", [])),
+            len(CHAT_STYLE_EXPORT_PROFILE.get("short_lines", [])),
+            len(CHAT_STYLE_EXPORT_PROFILE.get("sticker_paths", [])),
+            len(CHAT_STYLE_EXPORT_PROFILE.get("gif_paths", [])),
+            len(CHAT_STYLE_EXPORT_PROFILE.get("image_paths", [])),
+        )
+    except Exception as e:
+        logger.warning(f"Could not load chat export style profile: {e}")
+
+
+def _chat_style_prompt_suffix() -> str:
+    pairs: list[tuple[str, str]] = CHAT_STYLE_EXPORT_PROFILE.get("example_pairs", [])
+    lines: list[str] = CHAT_STYLE_EXPORT_PROFILE.get("short_lines", [])
+    if not pairs and not lines:
+        return ""
+
+    prompt_lines: list[str] = [
+        "",
+        "Real chat style to imitate (from exported group history):",
+        "- Keep this same natural flow, brevity, and slang balance.",
+    ]
+
+    for u, a in pairs[-8:]:
+        prompt_lines.append(f"User: {u}")
+        prompt_lines.append(f"Reply style: {a}")
+    if lines:
+        prompt_lines.append("Common short lines:")
+        for line in lines[-12:]:
+            prompt_lines.append(f"- {line}")
+
+    return "\n".join(prompt_lines)
+
+
+def _detect_media_request(message_text: str) -> Optional[str]:
+    t = (message_text or "").lower()
+    if any(k in t for k in ("sticker", "stciker", "stiker", "stikcer")):
+        return "sticker"
+    if any(k in t for k in ("gif", "giff", "animation")):
+        return "gif"
+    if any(k in t for k in ("image", "img", "photo", "pic", "picture", "dp")):
+        return "image"
+    return None
+
+
+async def _send_style_media(
+    update: Update,
+    media_kind: str,
+    mood_keywords: Optional[tuple[str, ...]] = None,
+) -> bool:
+    if not update.message:
+        return False
+
+    sticker_pool: list[str] = CHAT_STYLE_EXPORT_PROFILE.get("sticker_paths", [])
+    gif_pool: list[str] = CHAT_STYLE_EXPORT_PROFILE.get("gif_paths", [])
+    image_pool: list[str] = CHAT_STYLE_EXPORT_PROFILE.get("image_paths", [])
+
+    def _pick_media_path(pool: list[str]) -> Optional[str]:
+        if not pool:
+            return None
+        if mood_keywords:
+            filtered = [p for p in pool if any(k in Path(p).name.lower() for k in mood_keywords)]
+            if filtered:
+                return random.choice(filtered)
+        return random.choice(pool)
+
+    if media_kind == "sticker":
+        media_path = _pick_media_path(sticker_pool)
+        if not media_path:
+            return False
+        try:
+            with open(media_path, "rb") as f:
+                await update.message.reply_sticker(sticker=f)
+            return True
+        except Exception as e:
+            logger.warning(f"Sticker send failed for {media_path}: {e}")
+            return False
+
+    if media_kind == "image":
+        media_path = _pick_media_path(image_pool)
+        if not media_path:
+            return False
+        try:
+            with open(media_path, "rb") as f:
+                await update.message.reply_photo(photo=f)
+            return True
+        except Exception as e:
+            logger.warning(f"Image send failed for {media_path}: {e}")
+            return False
+
+    media_path = _pick_media_path(gif_pool)
+    if not media_path:
+        return False
+    try:
+        with open(media_path, "rb") as f:
+            await update.message.reply_animation(animation=f)
+        return True
+    except Exception:
+        try:
+            with open(media_path, "rb") as f:
+                await update.message.reply_video(video=f, supports_streaming=False)
+            return True
+        except Exception as e:
+            logger.warning(f"GIF/animation send failed for {media_path}: {e}")
+            return False
+
+
+async def _maybe_send_reaction_media(update: Update, user_message: str) -> None:
+    if not update.message:
+        return
+    if not CHAT_STYLE_EXPORT_PROFILE.get("sticker_paths"):
+        return
+
+    explicit = _detect_media_request(user_message)
+    if explicit:
+        await _send_style_media(update, explicit)
+        return
+
+    def _media_context(text: str) -> tuple[str, tuple[str, ...], float]:
+        mood_map: list[tuple[tuple[str, ...], str, tuple[str, ...], float]] = [
+            (("sad", "dukhi", "cry", "rona", "alone", "heartbreak", "breakup"), "sticker", ("sad", "cry", "tear", "broken"), 0.22),
+            (("angry", "gussa", "mad", "irritate", "frustrat"), "sticker", ("angry", "mad", "rage"), 0.18),
+            (("love", "pyar", "luv", "romantic", "crush", "miss"), "gif", ("love", "heart", "kiss", "cute"), 0.20),
+            (("lol", "lmao", "haha", "hehe", "funny", "meme"), "gif", ("funny", "lol", "meme", "laugh"), 0.24),
+            (("good morning", "gm", "good night", "gn", "morning", "night"), "image", ("good", "morning", "night"), 0.14),
+            (("anime", "naruto", "gojo", "itachi", "kakashi"), "sticker", ("anime", "naruto", "gojo"), 0.18),
+        ]
+        for triggers, media_kind, keys, chance in mood_map:
+            if any(t in text for t in triggers):
+                return media_kind, keys, chance
+        return "sticker", ("fun", "smile", "happy"), 0.05
+
+    # Context-aware chance and media choice.
+    low = (user_message or "").lower()
+    media_kind, mood_keywords, chance = _media_context(low)
+    if random.random() < chance:
+        await _send_style_media(update, media_kind, mood_keywords=mood_keywords)
+
+
+_load_chat_style_profile()
 
 # ========================= GEMINI AI HELPER ========================= #
 
 def _build_group_style_system_prompt(user_lang: str) -> str:
     """Compose group-style prompt with language steering."""
     base_prompt = MUSIC_HANDLERS.get_group_style_system_prompt()
+    style_suffix = _chat_style_prompt_suffix()
     lang_instruction = f"\n[User language: {user_lang.upper()}]"
     if user_lang == "english":
         lang_instruction += " Reply ONLY in English."
@@ -1037,7 +1456,7 @@ def _build_group_style_system_prompt(user_lang: str) -> str:
         lang_instruction += " Reply in Hinglish."
     else:
         lang_instruction += " Reply in the same language used by the user message."
-    return base_prompt + lang_instruction
+    return base_prompt + style_suffix + lang_instruction
 
 def _repair_mojibake_text(text: str) -> str:
     """Best-effort fix for common mojibake in outgoing text."""
@@ -4406,6 +4825,26 @@ async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await update.effective_message.reply_text("\n".join(lines))
 
 
+async def reloadstyle_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner command: reload chat-export style profile from disk."""
+    if not update.effective_user or update.effective_user.id != ADMIN_ID:
+        await update.effective_message.reply_text("Only owner can use this command.")
+        return
+
+    _load_chat_style_profile()
+    summary = (
+        "Chat style reload complete.\n"
+        f"Dirs: {len(CHAT_STYLE_EXPORT_PROFILE.get('source_dirs', []))}\n"
+        f"Files: {len(CHAT_STYLE_EXPORT_PROFILE.get('source_files', []))}\n"
+        f"Pairs: {len(CHAT_STYLE_EXPORT_PROFILE.get('example_pairs', []))}\n"
+        f"Short lines: {len(CHAT_STYLE_EXPORT_PROFILE.get('short_lines', []))}\n"
+        f"Stickers: {len(CHAT_STYLE_EXPORT_PROFILE.get('sticker_paths', []))}\n"
+        f"GIF/Anim: {len(CHAT_STYLE_EXPORT_PROFILE.get('gif_paths', []))}\n"
+        f"Images: {len(CHAT_STYLE_EXPORT_PROFILE.get('image_paths', []))}"
+    )
+    await update.effective_message.reply_text(summary)
+
+
 async def broadcastsong_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Owner command: download one song and broadcast to all users + groups."""
     if update.effective_user.id != ADMIN_ID:
@@ -5582,6 +6021,14 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(tool_reply)
         return
 
+    explicit_media = _detect_media_request(user_message)
+    if explicit_media:
+        sent = await _send_style_media(update, explicit_media)
+        if sent:
+            BOT_DB.add_chat_memory(user_id, update.effective_chat.id, "user", user_message)
+            BOT_DB.add_chat_memory(user_id, update.effective_chat.id, "assistant", f"[sent {explicit_media}]")
+            return
+
     lang_instruction = f"\nUSER LANGUAGE PREFERENCE: {user_lang.upper()}"
     if user_lang == "english":
         lang_instruction += "\nReply ONLY in English."
@@ -5590,7 +6037,7 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
     else:
         lang_instruction += "\nReply in the same language used by the user message."
 
-    system_prompt_with_lang = SYSTEM_PROMPT + lang_instruction
+    system_prompt_with_lang = SYSTEM_PROMPT + _chat_style_prompt_suffix() + lang_instruction
     history = _build_memory_messages(user_id, update.effective_chat.id, limit=10)
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
@@ -5605,6 +6052,7 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
     BOT_DB.add_chat_memory(user_id, update.effective_chat.id, "user", user_message)
     BOT_DB.add_chat_memory(user_id, update.effective_chat.id, "assistant", ai_response)
     await update.message.reply_text(ai_response)
+    await _maybe_send_reaction_media(update, user_message)
 
 async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle group messages - ONLY reply when specifically triggered"""
@@ -5738,6 +6186,11 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
                         should_respond = True
                         logger.info(f" Trigger: Greeting '{greeting}'")
                         break
+
+        # Trigger 5: Explicit media request (sticker/gif)
+        if not should_respond and _detect_media_request(message_text):
+            should_respond = True
+            logger.info(" Trigger: Media request")
         
         # If NO trigger, IGNORE silently
         if not should_respond:
@@ -5769,6 +6222,14 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             BOT_DB.add_chat_memory(user_id, group_id, "assistant", tool_reply)
             await update.message.reply_text(tool_reply, quote=True if bot_mentioned else False)
             return
+
+        explicit_media = _detect_media_request(message_text)
+        if explicit_media:
+            sent = await _send_style_media(update, explicit_media)
+            if sent:
+                BOT_DB.add_chat_memory(user_id, group_id, "user", message_text)
+                BOT_DB.add_chat_memory(user_id, group_id, "assistant", f"[sent {explicit_media}]")
+                return
 
         history = _build_memory_messages(user_id, group_id, limit=8)
         
@@ -5803,6 +6264,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             BOT_DB.add_chat_memory(user_id, group_id, "user", message_text)
             BOT_DB.add_chat_memory(user_id, group_id, "assistant", ai_response)
+            await _maybe_send_reaction_media(update, message_text)
             logger.info(f" Sent response to group: {ai_response[:40]}...")
         except Exception as e:
             logger.error(f"Failed to send group message reply: {e}")
@@ -6323,6 +6785,7 @@ def main() -> None:
     application.add_handler(CommandHandler("members", members_command))
     application.add_handler(CommandHandler("dashboard", dashboard_command))
     application.add_handler(CommandHandler("channelstats", channelstats_command))
+    application.add_handler(CommandHandler("reloadstyle", reloadstyle_command))
     application.add_handler(CommandHandler("buildinfo", buildinfo_command))
     application.add_handler(CommandHandler("chatid", chatid_command))
     
