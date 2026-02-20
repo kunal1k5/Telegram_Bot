@@ -1,9 +1,12 @@
 import asyncio
 import importlib
+import json
 import logging
 import os
 import re
 import tempfile
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Optional
@@ -338,6 +341,22 @@ class VCManager:
         s = text.lower()
         return "youtube.com/" in s or "youtu.be/" in s
 
+    def _fetch_youtube_oembed_title(self, url: str) -> Optional[str]:
+        """Fetch video title via YouTube oEmbed (works even when formats are restricted)."""
+        try:
+            endpoint = "https://www.youtube.com/oembed"
+            q = urllib.parse.urlencode({"url": url, "format": "json"})
+            req = urllib.request.Request(
+                f"{endpoint}?{q}",
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+            title = (data.get("title") or "").strip()
+            return title or None
+        except Exception:
+            return None
+
     def _is_antibot_error(self, error_text: str) -> bool:
         return (
             "sign in to confirm" in error_text.lower()
@@ -537,6 +556,10 @@ class VCManager:
                         webpage_url = info.get("webpage_url") or webpage_url
                 except Exception:
                     pass
+                if title == "Unknown Title":
+                    oembed_title = self._fetch_youtube_oembed_title(query)
+                    if oembed_title:
+                        title = oembed_title
         else:
             search_opts = dict(base_opts)
             search_opts["extract_flat"] = True
@@ -589,6 +612,10 @@ class VCManager:
         if query_is_url and self._is_youtube_url(webpage_url):
             try:
                 fallback_query = title if title and title != "Unknown Title" else query
+                if fallback_query.startswith(("http://", "https://")):
+                    oembed_title = self._fetch_youtube_oembed_title(webpage_url)
+                    if oembed_title:
+                        fallback_query = oembed_title
                 for alt_title, alt_url in self._extract_search_candidates(fallback_query, base_opts, limit=8):
                     if alt_url == webpage_url:
                         continue
