@@ -41,6 +41,7 @@ except ImportError:
 
 from database import BotDatabase
 from vc_manager import VCManager
+from music_handlers import MusicHandlers
 
 # ========================= CONFIGURATION ========================= #
 
@@ -300,7 +301,7 @@ async def _register_group(chat_id: int, chat: Optional[Chat] = None) -> None:
             "members": {}  # Store group members: {user_id: {username, first_name, last_seen, msg_count}}
         }
         REGISTERED_GROUPS.add(chat_id)
-        logger.info(f"âœ… New group registered: {GROUPS_DATABASE[chat_id]['title']} ({chat_id})")
+        logger.info(f" New group registered: {GROUPS_DATABASE[chat_id]['title']} ({chat_id})")
     else:
         # Update existing group
         GROUPS_DATABASE[chat_id]["last_active"] = current_time
@@ -350,7 +351,7 @@ async def _register_group_member(chat_id: int, user_id: int, username: Optional[
         }
         # Update group member count
         GROUPS_DATABASE[chat_id]["member_count"] = len(members)
-        logger.info(f"ðŸ‘¤ New member in {GROUPS_DATABASE[chat_id].get('title', 'group')}: "
+        logger.info(f" New member in {GROUPS_DATABASE[chat_id].get('title', 'group')}: "
                    f"@{username or 'None'} ({first_name or 'Unknown'})")
     else:
         # Update existing member
@@ -380,8 +381,8 @@ async def _register_user(user_id: int, username: Optional[str] = None, first_nam
             "message_count": 0
         }
         REGISTERED_USERS.add(user_id)
-        logger.info(f"ðŸ“ New user registered: @{username or 'None'} ({first_name or 'Unknown'}) - ID: {user_id}")
-        logger.info(f"ðŸ“Š Total users: {len(USERS_DATABASE)}")
+        logger.info(f" New user registered: @{username or 'None'} ({first_name or 'Unknown'}) - ID: {user_id}")
+        logger.info(f" Total users: {len(USERS_DATABASE)}")
     else:
         # Update existing user
         USERS_DATABASE[user_id]["last_seen"] = current_time
@@ -605,7 +606,7 @@ async def _check_spam(update: Update, context: ContextTypes.DEFAULT_TYPE) -> boo
             if user_key not in WARNED_USERS or current_time - WARNED_USERS[user_key] > 300:
                 await context.bot.send_message(
                     chat_id=chat_id,
-                    text=f"Thoda slow ðŸ™‚ spam mat karo"
+                    text=f"Thoda slow  spam mat karo"
                 )
                 WARNED_USERS[user_key] = current_time
             
@@ -903,17 +904,17 @@ async def _send_play_log_to_channel(
     username_line = f"@{user.username}" if user.username else "None"
     log_text = (
         "YukkiMusicBot PLAY LOG\n\n"
-        "🎵 Now Playing\n"
-        f"💬 Chat: {chat.title if chat else 'Private Chat'}\n"
-        f"🆔 Chat ID: {chat.id if chat else 'None'}\n"
-        f"👤 User: {user.first_name or 'Unknown'}\n"
-        f"👥 Username: {username_line}\n"
-        f"🔞 User ID: {user.id}\n"
-        f"🔗 Chat Link: {_safe_chat_link(chat)}\n"
-        f"🔍 Searched: {searched_text}\n"
-        f"🎶 Title: {line_title}\n"
-        f"🧭 Source: {source}\n"
-        f"⏰ Time: {now_str}"
+        " Now Playing\n"
+        f" Chat: {chat.title if chat else 'Private Chat'}\n"
+        f" Chat ID: {chat.id if chat else 'None'}\n"
+        f" User: {user.first_name or 'Unknown'}\n"
+        f" Username: {username_line}\n"
+        f" User ID: {user.id}\n"
+        f" Chat Link: {_safe_chat_link(chat)}\n"
+        f" Searched: {searched_text}\n"
+        f" Title: {line_title}\n"
+        f" Source: {source}\n"
+        f" Time: {now_str}"
     )
 
     await _send_log_to_channel(context, log_text)
@@ -1022,6 +1023,7 @@ BOT_DB = BotDatabase(Path("bot_data.db"))
 VC_MANAGER: Optional[VCManager] = None
 VC_LOCK = asyncio.Lock()
 VC_ASSISTANT_PRESENT_CACHE: Dict[int, float] = {}
+MUSIC_HANDLERS = MusicHandlers(OWNER_USERNAME, CHANNEL_USERNAME)
 
 # ========================= GEMINI AI HELPER ========================= #
 
@@ -1158,16 +1160,16 @@ def get_openrouter_response(
                 .get("content", "")
             )
             if content:
-                logger.info(f"âœ… OpenRouter success: {len(content)} chars")
+                logger.info(f" OpenRouter success: {len(content)} chars")
                 return content.strip()
             else:
-                logger.warning("âš ï¸ OpenRouter returned empty content")
+                logger.warning(" OpenRouter returned empty content")
                 return None
     except httpx.HTTPStatusError as exc:
-        logger.error(f"âŒ OpenRouter HTTP error {exc.response.status_code}: {exc.response.text[:200]}")
+        logger.error(f" OpenRouter HTTP error {exc.response.status_code}: {exc.response.text[:200]}")
         return None
     except Exception as exc:
-        logger.error(f"âŒ OpenRouter error: {type(exc).__name__}: {exc}")
+        logger.error(f" OpenRouter error: {type(exc).__name__}: {exc}")
         return None
 
 
@@ -1216,15 +1218,15 @@ def get_openai_response(
                 .get("content", "")
             )
             if content:
-                logger.info(f"âœ… OpenAI success: {len(content)} chars")
+                logger.info(f" OpenAI success: {len(content)} chars")
                 return content.strip()
-            logger.warning("âš ï¸ OpenAI returned empty content")
+            logger.warning(" OpenAI returned empty content")
             return None
     except httpx.HTTPStatusError as exc:
-        logger.error(f"âŒ OpenAI HTTP error {exc.response.status_code}: {exc.response.text[:200]}")
+        logger.error(f" OpenAI HTTP error {exc.response.status_code}: {exc.response.text[:200]}")
         return None
     except Exception as exc:
-        logger.error(f"âŒ OpenAI error: {type(exc).__name__}: {exc}")
+        logger.error(f" OpenAI error: {type(exc).__name__}: {exc}")
         return None
 
 
@@ -1235,14 +1237,14 @@ def get_ai_response(
     conversation_history: Optional[list[dict[str, str]]] = None,
 ) -> str:
     """Use OpenRouter API only."""
-    logger.info(f"ðŸ”„ Processing message from {user_name}...")
+    logger.info(f" Processing message from {user_name}...")
     
     if not OPENROUTER_API_KEY:
-        error_msg = "âŒ OpenRouter API key not configured!"
+        error_msg = " OpenRouter API key not configured!"
         logger.error(error_msg)
         return "OpenRouter API key not configured. Please set OPENROUTER_API_KEY environment variable."
     
-    logger.info("ðŸ“¡ Calling OpenRouter API...")
+    logger.info(" Calling OpenRouter API...")
     openrouter_text = get_openrouter_response(
         user_message,
         user_name,
@@ -1251,10 +1253,10 @@ def get_ai_response(
     )
     
     if openrouter_text:
-        logger.info(f"âœ… OpenRouter succeeded: {len(openrouter_text)} chars")
+        logger.info(f" OpenRouter succeeded: {len(openrouter_text)} chars")
         return _repair_mojibake_text(openrouter_text)
     else:
-        logger.error("âŒ OpenRouter API returned empty response")
+        logger.error(" OpenRouter API returned empty response")
         return "Sorry, couldn't get a response from OpenRouter. Please try again."
 
 def get_gemini_response(user_message: str, user_name: str = "User", system_prompt: Optional[str] = None) -> str:
@@ -1291,20 +1293,20 @@ def get_gemini_response(user_message: str, user_name: str = "User", system_promp
                 )
 
                 if response and response.text:
-                    logger.info(f"âœ… Gemini success ({model_name}): {len(response.text)} chars")
+                    logger.info(f" Gemini success ({model_name}): {len(response.text)} chars")
                     return response.text.strip()
             except Exception as inner_exc:
                 last_error = inner_exc
-                logger.warning(f"âš ï¸ Gemini model {model_name} failed: {type(inner_exc).__name__}: {str(inner_exc)[:100]}")
+                logger.warning(f" Gemini model {model_name} failed: {type(inner_exc).__name__}: {str(inner_exc)[:100]}")
                 continue
 
         if last_error:
             logger.error("Gemini API error: %s", last_error)
-        return "thoda network issue lag raha hai ðŸ˜… phir se try karna"
+        return "thoda network issue lag raha hai  phir se try karna"
 
     except Exception as e:
         logger.error(f"Gemini API error: {e}")
-        return "thoda network issue lag raha hai ðŸ˜… phir se try karna"
+        return "thoda network issue lag raha hai  phir se try karna"
 
 
 
@@ -1478,19 +1480,19 @@ async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_T
             if new_status in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR] and \
                old_status not in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR]:
                 await _register_group(chat.id, chat)
-                logger.info(f"âœ… Bot added to group: {chat.title} ({chat.id})")
+                logger.info(f" Bot added to group: {chat.title} ({chat.id})")
                 
                 # Send welcome message
                 try:
                     await context.bot.send_message(
                         chat_id=chat.id,
                         text=(
-                            "🎉 Hello! I'm Baby ❤️\n\n"
+                            " Hello! I'm Baby \n\n"
                             "Commands:\n"
                             "? /song <name> - Download a song file\n"
                             "? /help - Open command guide\n"
                             "? /all - Tag active members (admin only)\n\n"
-                            "Type 'baby' and I'll reply 😄"
+                            "Type 'baby' and I'll reply "
                         )
                     )
                 except Exception as e:
@@ -1502,7 +1504,7 @@ async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_T
                 # Remove from groups database
                 if chat.id in GROUPS_DATABASE:
                     _remove_group_everywhere(chat.id)
-                logger.info(f"âŒ Bot removed from group: {chat.title} ({chat.id})")
+                logger.info(f" Bot removed from group: {chat.title} ({chat.id})")
     
     except Exception as e:
         logger.error(f"Error in my_chat_member_handler: {e}")
@@ -1584,15 +1586,15 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     # Only works in private chat
     if update.effective_chat.type != ChatType.PRIVATE:
         await update.effective_message.reply_text(
-            "âŒ Ye command sirf private chat mein use kar sakte ho."
+            " Ye command sirf private chat mein use kar sakte ho."
         )
         return
     
     # Check if already opted out
     if user_id in OPTED_OUT_USERS:
         await update.effective_message.reply_text(
-            "âœ… Tumhe pehle se hi broadcasts nahi mil rahe hain.\n\n"
-            "Agar dobara chahiye toh /start karke fir se activate kar sakte ho! ðŸ˜Š"
+            " Tumhe pehle se hi broadcasts nahi mil rahe hain.\n\n"
+            "Agar dobara chahiye toh /start karke fir se activate kar sakte ho! "
         )
         return
     
@@ -1600,11 +1602,11 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     OPTED_OUT_USERS.add(user_id)
     _save_opted_out_users(OPTED_OUT_USERS)
     
-    logger.info(f"ðŸ“µ User {user_id} opted out of broadcasts")
+    logger.info(f" User {user_id} opted out of broadcasts")
     
     await update.effective_message.reply_text(
-        "âœ… Done! Ab tumhe broadcasts nahi aayenge.\n\n"
-        "Agar kabhi wapas chahiye toh /start karke dobara activate kar sakte ho! ðŸ’•"
+        " Done! Ab tumhe broadcasts nahi aayenge.\n\n"
+        "Agar kabhi wapas chahiye toh /start karke dobara activate kar sakte ho! "
     )
 
 
@@ -1622,14 +1624,14 @@ async def members_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if chat.type == ChatType.PRIVATE:
         if user_id != ADMIN_ID:
             await update.effective_message.reply_text(
-                "âŒ Ye command sirf groups mein use karo! ðŸ˜Š"
+                " Ye command sirf groups mein use karo! "
             )
             return
         
         # Admin can use in private with group ID
         if not context.args:
             await update.effective_message.reply_text(
-                "ðŸ“‹ *Usage:*\n"
+                " *Usage:*\n"
                 "`/members` - Group mein use karo\n"
                 "`/members <group_id>` - Private mein specific group ke members dekho",
                 parse_mode=ParseMode.MARKDOWN
@@ -1640,7 +1642,7 @@ async def members_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             group_id = int(context.args[0])
         except ValueError:
             await update.effective_message.reply_text(
-                "âŒ Invalid group ID! Number dalo."
+                " Invalid group ID! Number dalo."
             )
             return
     else:
@@ -1651,7 +1653,7 @@ async def members_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # Check if group exists in database
     if group_id not in GROUPS_DATABASE:
         await update.effective_message.reply_text(
-            "âŒ Group database mein nahi mila! Pehle kuch messages bhejo."
+            " Group database mein nahi mila! Pehle kuch messages bhejo."
         )
         return
     
@@ -1660,8 +1662,8 @@ async def members_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     if not members:
         await update.effective_message.reply_text(
-            "ðŸ‘¥ Abhi tak koi member track nahi hua!\n"
-            "Jab log messages bhejenge, tab automatically add honge. âœ¨"
+            " Abhi tak koi member track nahi hua!\n"
+            "Jab log messages bhejenge, tab automatically add honge. "
         )
         return
     
@@ -1674,7 +1676,7 @@ async def members_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     # Show first 20 members
     group_title = group_data.get("title", "Unknown Group")
-    members_text = f"ðŸ‘¥ *Members of {group_title}* (Top 20):\n\n"
+    members_text = f" *Members of {group_title}* (Top 20):\n\n"
     
     for idx, (uid_str, member_data) in enumerate(sorted_members[:20], 1):
         first_name = member_data.get("first_name", "Unknown")
@@ -1700,7 +1702,7 @@ async def members_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             f"   {msg_count} msgs | {last_seen_str}\n\n"
         )
     
-    members_text += f"ðŸ“Š Total: {len(members)} members tracked"
+    members_text += f" Total: {len(members)} members tracked"
     
     await update.effective_message.reply_text(
         members_text,
@@ -1719,7 +1721,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     # Check if user is admin
     if user_id != ADMIN_ID:
         await update.effective_message.reply_text(
-            "ðŸ” Oops! Sirf admin (bot ka owner) kar sakte hain ye. ðŸ˜…"
+            " Oops! Sirf admin (bot ka owner) kar sakte hain ye. "
         )
         logger.warning(f"Unauthorized broadcast attempt by user {user_id}")
         return
@@ -1727,10 +1729,10 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     # Check if message is provided
     if not context.args:
         await update.effective_message.reply_text(
-            "ðŸ“¢ *Broadcast Command*\n\n"
+            " *Broadcast Command*\n\n"
             "Usage: /broadcast <message>\n\n"
-            "Example: /broadcast Heyy! Naya feature aya hai ðŸŽ‰\n\n"
-            "Message sabko bhej denge! ðŸ’•"
+            "Example: /broadcast Heyy! Naya feature aya hai \n\n"
+            "Message sabko bhej denge! "
         )
         return
     
@@ -1747,10 +1749,10 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     total_recipients = total_users + total_groups
     
     confirm_msg = await update.effective_message.reply_text(
-        f"ðŸ“¢ Broadcasting to {total_users} users + {total_groups} groups...\n"
+        f" Broadcasting to {total_users} users + {total_groups} groups...\n"
         f"({opted_out_count} users opted out)\n\n"
         f"Message: \"{broadcast_message}\"\n\n"
-        f"Please wait... ðŸ”„"
+        f"Please wait... "
     )
     
     # Track broadcast stats
@@ -1760,7 +1762,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     failed_groups = 0
     blocked_count = 0
     
-    logger.info(f"ðŸ“¢ Starting broadcast to {total_users} users and {total_groups} groups")
+    logger.info(f" Starting broadcast to {total_users} users and {total_groups} groups")
     
     # Send message to each active user (excluding opted-out)
     for idx, user_broadcast_id in enumerate(active_users, 1):
@@ -1772,7 +1774,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             # Send message with Baby personality
             await context.bot.send_message(
                 chat_id=user_broadcast_id,
-                text=f"ðŸ’• {broadcast_message}",
+                text=f" {broadcast_message}",
                 parse_mode=ParseMode.MARKDOWN,
             )
             sent_to_users += 1
@@ -1808,7 +1810,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             # Send message to group
             await context.bot.send_message(
                 chat_id=group_id,
-                text=f"ðŸ“¢ **BROADCAST FROM OWNER** ðŸ“¢\n\nðŸ’• {broadcast_message}",
+                text=f" **BROADCAST FROM OWNER** \n\n {broadcast_message}",
                 parse_mode=ParseMode.MARKDOWN,
             )
             sent_to_groups += 1
@@ -1828,22 +1830,22 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 logger.error(f"Broadcast failed for group {group_id}: {e}")
     
     logger.info(
-        f"âœ… Broadcast complete | Users: {sent_to_users}/{total_users} | Groups: {sent_to_groups}/{total_groups} | "
+        f" Broadcast complete | Users: {sent_to_users}/{total_users} | Groups: {sent_to_groups}/{total_groups} | "
         f"Failed users: {failed_users} | Failed groups: {failed_groups} | Blocked: {blocked_count}"
     )
     
     # Update confirmation message with results
     await confirm_msg.edit_text(
-        f"âœ… **Broadcast Complete!**\n\n"
-        f"ðŸ‘¤ Users:\n"
-        f"  âœ”ï¸ Sent: {sent_to_users}/{total_users}\n"
-        f"  âœ— Failed: {failed_users}\n"
-        f"  ðŸ”’ Blocked: {blocked_count}\n"
-        f"  ðŸ“µ Opted out: {opted_out_count}\n\n"
-        f"ðŸ‘¥ Groups:\n"
-        f"  âœ”ï¸ Sent: {sent_to_groups}/{total_groups}\n"
-        f"  âœ— Failed: {failed_groups}\n\n"
-        f"ðŸ’• Message: {broadcast_message}"
+        f" **Broadcast Complete!**\n\n"
+        f" Users:\n"
+        f"   Sent: {sent_to_users}/{total_users}\n"
+        f"   Failed: {failed_users}\n"
+        f"   Blocked: {blocked_count}\n"
+        f"   Opted out: {opted_out_count}\n\n"
+        f" Groups:\n"
+        f"   Sent: {sent_to_groups}/{total_groups}\n"
+        f"   Failed: {failed_groups}\n\n"
+        f" Message: {broadcast_message}"
     )
 
 
@@ -1858,7 +1860,7 @@ async def broadcast_content(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     # Check if user is admin
     if user_id != ADMIN_ID:
         await update.effective_message.reply_text(
-            "ðŸ” Oops! Sirf admin (bot ka owner) kar sakte hain ye. ðŸ˜…"
+            " Oops! Sirf admin (bot ka owner) kar sakte hain ye. "
         )
         logger.warning(f"Unauthorized broadcast attempt by user {user_id}")
         return
@@ -1866,15 +1868,15 @@ async def broadcast_content(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     # Must be a reply to a message
     if not update.message.reply_to_message:
         await update.effective_message.reply_text(
-            "ðŸ“¢ *Broadcast Content*\n\n"
-            "à¤•à¥ˆà¤¸à¥‡ use à¤•à¤°à¥‡à¤‚:\n"
-            "1. à¤•à¥‹à¤ˆ à¤­à¥€ message/photo/video/audio/document à¤­à¥‡à¤œà¥‹\n"
-            "2. à¤‰à¤¸ message à¤•à¥‹ reply à¤•à¤°à¤•à¥‡ /broadcast_now à¤²à¤¿à¤–à¥‹\n"
-            "3. à¤¸à¤­à¥€ users à¤”à¤° groups à¤•à¥‹ à¤µà¤¹ content à¤šà¤²à¤¾ à¤¦à¥‡à¤‚à¤—à¥‡!\n\n"
+            " *Broadcast Content*\n\n"
+            " use :\n"
+            "1.   message/photo/video/audio/document \n"
+            "2.  message  reply  /broadcast_now \n"
+            "3.  users  groups   content  !\n\n"
             "Example:\n"
-            "Message â†’ [à¤•à¥‹à¤ˆ à¤—à¤¾à¤¨à¤¾ or à¤µà¥€à¤¡à¤¿à¤¯à¥‹]\n"
-            "Reply â†’ /broadcast_now\n\n"
-            "à¤¸à¤­à¥€ à¤•à¥‹ à¤®à¤¿à¤² à¤œà¤¾à¤à¤—à¤¾! ðŸ’•"
+            "Message  [  or ]\n"
+            "Reply  /broadcast_now\n\n"
+            "   ! "
         )
         return
     
@@ -1890,10 +1892,10 @@ async def broadcast_content(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     
     # Show confirmation
     confirm_msg = await update.effective_message.reply_text(
-        f"ðŸ“¢ Broadcasting content to:\n"
-        f"ðŸ‘¤ {total_users} users (+ {opted_out_count} opted out)\n"
-        f"ðŸ‘¥ {total_groups} groups\n\n"
-        f"Please wait... ðŸ”„"
+        f" Broadcasting content to:\n"
+        f" {total_users} users (+ {opted_out_count} opted out)\n"
+        f" {total_groups} groups\n\n"
+        f"Please wait... "
     )
     
     sent_to_users = 0
@@ -1902,7 +1904,7 @@ async def broadcast_content(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     failed_groups = 0
     blocked_count = 0
     
-    logger.info(f"ðŸ“¢ Starting content broadcast to {total_users} users and {total_groups} groups")
+    logger.info(f" Starting content broadcast to {total_users} users and {total_groups} groups")
     
     # Send content to each active user
     for idx, user_broadcast_id in enumerate(active_users, 1):
@@ -1966,22 +1968,22 @@ async def broadcast_content(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 logger.error(f"Broadcast failed for group {group_id}: {e}")
     
     logger.info(
-        f"âœ… Content broadcast complete | Users: {sent_to_users}/{total_users} | Groups: {sent_to_groups}/{total_groups} | "
+        f" Content broadcast complete | Users: {sent_to_users}/{total_users} | Groups: {sent_to_groups}/{total_groups} | "
         f"Failed users: {failed_users} | Failed groups: {failed_groups} | Blocked: {blocked_count}"
     )
     
     # Update confirmation message with results
     await confirm_msg.edit_text(
-        f"âœ… **Content Broadcast Complete!** ðŸ“¢\n\n"
-        f"ðŸ‘¤ **Users:**\n"
-        f"  âœ”ï¸ Sent: {sent_to_users}/{total_users}\n"
-        f"  âœ— Failed: {failed_users}\n"
-        f"  ðŸ”’ Blocked: {blocked_count}\n"
-        f"  ðŸ“µ Opted out: {opted_out_count}\n\n"
-        f"ðŸ‘¥ **Groups:**\n"
-        f"  âœ”ï¸ Sent: {sent_to_groups}/{total_groups}\n"
-        f"  âœ— Failed: {failed_groups}\n\n"
-        f"ðŸ’• Content successfully broadcasted!"
+        f" **Content Broadcast Complete!** \n\n"
+        f" **Users:**\n"
+        f"   Sent: {sent_to_users}/{total_users}\n"
+        f"   Failed: {failed_users}\n"
+        f"   Blocked: {blocked_count}\n"
+        f"   Opted out: {opted_out_count}\n\n"
+        f" **Groups:**\n"
+        f"   Sent: {sent_to_groups}/{total_groups}\n"
+        f"   Failed: {failed_groups}\n\n"
+        f" Content successfully broadcasted!"
     )
 
 
@@ -2253,14 +2255,14 @@ async def all_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await _register_user(update.effective_user.id)
     
     if not update.effective_chat or update.effective_chat.type == ChatType.PRIVATE:
-        await update.effective_message.reply_text("This command works only in groups! ðŸ”’")
+        await update.effective_message.reply_text("This command works only in groups! ")
         return
     
     # Check admin status
     is_admin = await _check_admin_status(update, context)
     if not is_admin:
         await update.effective_message.reply_text(
-            "Only group admins can use this command! ðŸš«",
+            "Only group admins can use this command! ",
             reply_to_message_id=update.message.message_id
         )
         logger.info(f"Non-admin {update.effective_user.id} tried /all in {update.effective_chat.id}")
@@ -2270,7 +2272,7 @@ async def all_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if _check_cooldown(update.effective_chat.id):
         remaining = int(COOLDOWN_SECONDS - (time.time() - TAGGING_COOLDOWN[update.effective_chat.id]))
         await update.effective_message.reply_text(
-            f"Tagging cooldown active! Please wait {remaining} seconds. ðŸ•",
+            f"Tagging cooldown active! Please wait {remaining} seconds. ",
             reply_to_message_id=update.message.message_id
         )
         return
@@ -2283,7 +2285,7 @@ async def all_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     
     if not active_users:
         await update.effective_message.reply_text(
-            "No active users to tag right now! Try again when people chat. ðŸ¤·",
+            "No active users to tag right now! Try again when people chat. ",
             reply_to_message_id=update.message.message_id
         )
         return
@@ -2304,9 +2306,9 @@ async def all_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         mentions = " ".join([f"[{first_name}](tg://user?id={user_id})" for user_id, _, first_name in batch])
         
         if custom_msg:
-            message_text = f"{mentions}\n\nðŸ’¬ Message: {custom_msg}"
+            message_text = f"{mentions}\n\n Message: {custom_msg}"
         else:
-            message_text = f"{mentions}\n\nðŸ”” Group alert!"
+            message_text = f"{mentions}\n\n Group alert!"
         
         try:
             await context.bot.send_message(
@@ -2324,7 +2326,7 @@ async def all_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     status_msg = f"Tagged {len(active_users)} active user{'s' if len(active_users) != 1 else ''}"
     if len(batches) > 1:
         status_msg += f" in {len(batches)} messages"
-    status_msg += " âœ“"
+    status_msg += " "
     
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
@@ -2357,7 +2359,7 @@ async def all_mention_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     is_admin = await _check_admin_status(update, context)
     if not is_admin:
         await update.message.reply_text(
-            "Sirf admins @all use kar sakte hain! ðŸš«",
+            "Sirf admins @all use kar sakte hain! ",
             reply_to_message_id=update.message.message_id
         )
         return
@@ -2366,7 +2368,7 @@ async def all_mention_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     if _check_cooldown(update.effective_chat.id):
         remaining = int(COOLDOWN_SECONDS - (time.time() - TAGGING_COOLDOWN[update.effective_chat.id]))
         await update.message.reply_text(
-            f"Thoda ruko! {remaining} seconds baad phir try karo ðŸ•",
+            f"Thoda ruko! {remaining} seconds baad phir try karo ",
             reply_to_message_id=update.message.message_id
         )
         return
@@ -2376,7 +2378,7 @@ async def all_mention_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     if not active_users:
         await update.message.reply_text(
-            "Koi active user nahi hai abhi! ðŸ¤·\n"
+            "Koi active user nahi hai abhi! \n"
             "Log chat karne ke baad try karo.",
             reply_to_message_id=update.message.message_id
         )
@@ -2402,9 +2404,9 @@ async def all_mention_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         mentions = " ".join([f"[{first_name}](tg://user?id={user_id})" for user_id, _, first_name in batch])
         
         if custom_msg:
-            message_text = f"{mentions}\n\nðŸ“¢ {custom_msg}"
+            message_text = f"{mentions}\n\n {custom_msg}"
         else:
-            message_text = f"{mentions}\n\nðŸ”” Alert!"
+            message_text = f"{mentions}\n\n Alert!"
         
         try:
             await context.bot.send_message(
@@ -2416,13 +2418,13 @@ async def all_mention_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         except Exception as e:
             logger.error(f"Failed to send @all alert: {e}")
             await update.message.reply_text(
-                "Tag bhejne mein error aa gaya ðŸ˜… Shayad bot admin nahi hai?",
+                "Tag bhejne mein error aa gaya  Shayad bot admin nahi hai?",
                 reply_to_message_id=update.message.message_id
             )
             return
     
     # Send confirmation
-    status_msg = f"âœ… {len(active_users)} users ko tag kar diya!"
+    status_msg = f" {len(active_users)} users ko tag kar diya!"
     if len(batches) > 1:
         status_msg += f" ({len(batches)} messages mein)"
     
@@ -2447,10 +2449,10 @@ async def gm_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     logger.info(f"/gm command - user={user_name}")
     
     gm_messages = [
-        f"Good morning â˜€ï¸ {user_name}! Aaj ka din mast jaaye ðŸ˜„ chai pee li?",
-        f"Suprabhat ðŸŒ… {user_name}! Fresh ho gaya? Kal raat sona ho gaya? ðŸ˜Š",
-        f"Morning! â˜€ï¸ {user_name} ðŸ‘‹ Utho utho, duniya ko conquer karna hai! ðŸ’ª",
-        f"Arey good morning! â˜€ï¸ Taza taza morning aur tu yaha! Energy âœ¨ laag rahi? ðŸ˜Š",
+        f"Good morning  {user_name}! Aaj ka din mast jaaye  chai pee li?",
+        f"Suprabhat  {user_name}! Fresh ho gaya? Kal raat sona ho gaya? ",
+        f"Morning!  {user_name}  Utho utho, duniya ko conquer karna hai! ",
+        f"Arey good morning!  Taza taza morning aur tu yaha! Energy  laag rahi? ",
     ]
     
     message = random.choice(gm_messages)
@@ -2466,10 +2468,10 @@ async def gn_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     logger.info(f"/gn command - user={user_name}")
     
     gn_messages = [
-        f"Good night ðŸŒ™ {user_name}! Achha rest lo, kal baat karenge ðŸ˜Š",
-        f"Sone ja raha hai? ðŸ˜´ Thik hai, good night! Subah milte hain ðŸŒ™",
-        f"Sleep well {user_name}! ðŸŒ™ Kal phir se chat karenge ðŸ˜„",
-        f"Raat ko bhi mujhe yaad kiya? ðŸŒ™ Aww! Good night, sweet dreams ðŸ’­âœ¨",
+        f"Good night  {user_name}! Achha rest lo, kal baat karenge ",
+        f"Sone ja raha hai?  Thik hai, good night! Subah milte hain ",
+        f"Sleep well {user_name}!  Kal phir se chat karenge ",
+        f"Raat ko bhi mujhe yaad kiya?  Aww! Good night, sweet dreams ",
     ]
     
     message = random.choice(gn_messages)
@@ -2485,10 +2487,10 @@ async def bye_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     logger.info(f"/bye command - user={user_name}")
     
     bye_messages = [
-        f"Bye bye ðŸ‘‹ {user_name}! Phir milte hain, miss karunga ðŸ˜„",
-        f"Jaa raha hai? ðŸ‘‹ Thik hai, kal baat karenge {user_name}! ðŸ˜Š",
-        f"See you soon {user_name}! ðŸ‘‹ Bhut jaldi vapas aana ðŸš€",
-        f"Chal, phir milte hain! ðŸ‘‹ Tera intezar karunga ðŸ˜„",
+        f"Bye bye  {user_name}! Phir milte hain, miss karunga ",
+        f"Jaa raha hai?  Thik hai, kal baat karenge {user_name}! ",
+        f"See you soon {user_name}!  Bhut jaldi vapas aana ",
+        f"Chal, phir milte hain!  Tera intezar karunga ",
     ]
     
     message = random.choice(bye_messages)
@@ -2526,10 +2528,10 @@ async def thanks_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     logger.info(f"/thanks command - user={user_name}")
     
     thanks_messages = [
-        f"Arey mere ko thanks diya? ðŸ¥° Yaar tu toh bilkul acha insaan hai {user_name}! ðŸ˜Š",
-        f"Oh please {user_name}! ðŸ˜„ Tere help karna mere liye khushi ki baat hai â¤ï¸",
-        f"No no, thanks to you! ðŸ™ {user_name}, tu mere liye special hai ðŸ’–",
-        f"Arre kuch nahi! ðŸ˜Š Bas apna duty hai bhai {user_name}, thanks mat de! ðŸ¤—",
+        f"Arey mere ko thanks diya?  Yaar tu toh bilkul acha insaan hai {user_name}! ",
+        f"Oh please {user_name}!  Tere help karna mere liye khushi ki baat hai ",
+        f"No no, thanks to you!  {user_name}, tu mere liye special hai ",
+        f"Arre kuch nahi!  Bas apna duty hai bhai {user_name}, thanks mat de! ",
     ]
     
     message = random.choice(thanks_messages)
@@ -2545,10 +2547,10 @@ async def sorry_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     logger.info(f"/sorry command - user={user_name}")
     
     sorry_messages = [
-        f"Arrey relax {user_name}! ðŸ˜Š Sab thik hai, tention mat lo! We're cool ðŸ˜„",
-        f"Arre matlab kya sorry! ðŸ¤— Tum mera best friend ho, no sorry-sovry ðŸ’¯",
-        f"No worries {user_name}! ðŸ™ Sab kuch normal hai, move on! ðŸ˜„",
-        f"Arre haan haan, all is well! âœ¨ {user_name}, tu mera bhai hai ðŸ’ª",
+        f"Arrey relax {user_name}!  Sab thik hai, tention mat lo! We're cool ",
+        f"Arre matlab kya sorry!  Tum mera best friend ho, no sorry-sovry ",
+        f"No worries {user_name}!  Sab kuch normal hai, move on! ",
+        f"Arre haan haan, all is well!  {user_name}, tu mera bhai hai ",
     ]
     
     message = random.choice(sorry_messages)
@@ -2564,10 +2566,10 @@ async def mood_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     logger.info(f"/mood command - user={user_name}")
     
     mood_messages = [
-        f"Arre {user_name}! ðŸ˜Š Tu kaisa feel kar raha hai aaj? Happy? Sad? Confused? Bataa na! ðŸ¤”",
-        f"{user_name}! ðŸ‘‹ Tere mood ka kya chal raha hai? Mast? Udaas? Dimag chalti hai? ðŸ˜„",
-        f"Heyy {user_name}! âœ¨ Tere andar ka vibe kya hai aaj? Share karo na! ðŸ’­",
-        f"Arre {user_name}! ðŸŽ­ Aaj mood kaisa hai? Sun lo meri baat, sab theek hojayega! ðŸ˜Š",
+        f"Arre {user_name}!  Tu kaisa feel kar raha hai aaj? Happy? Sad? Confused? Bataa na! ",
+        f"{user_name}!  Tere mood ka kya chal raha hai? Mast? Udaas? Dimag chalti hai? ",
+        f"Heyy {user_name}!  Tere andar ka vibe kya hai aaj? Share karo na! ",
+        f"Arre {user_name}!  Aaj mood kaisa hai? Sun lo meri baat, sab theek hojayega! ",
     ]
     
     message = random.choice(mood_messages)
@@ -2580,11 +2582,11 @@ async def ga_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     user_name = update.effective_user.first_name or "Bhai"
     
     ga_messages = [
-        f"Good afternoon â˜€ï¸ {user_name}! Lunch ho gaya? Kuch achha khaya? ðŸ˜‹",
-        f"Afternoon {user_name}! ðŸŒž Dopahar ka time hai, thoda rest le lo ðŸ˜Š",
-        f"Namaste {user_name}! ðŸ‘‹ Afternoon ka vibe kaisa hai? Mast? ðŸŒ¤ï¸",
-        f"Good afternoon âœ¨ {user_name}! Din kaisa ja raha hai? Productive? ðŸ’ª",
-        f"Afternoon ho gayi {user_name}! â˜€ï¸ Kuch special plan hai shaam ke liye? ðŸ˜„"
+        f"Good afternoon  {user_name}! Lunch ho gaya? Kuch achha khaya? ",
+        f"Afternoon {user_name}!  Dopahar ka time hai, thoda rest le lo ",
+        f"Namaste {user_name}!  Afternoon ka vibe kaisa hai? Mast? ",
+        f"Good afternoon  {user_name}! Din kaisa ja raha hai? Productive? ",
+        f"Afternoon ho gayi {user_name}!  Kuch special plan hai shaam ke liye? "
     ]
     
     await update.effective_message.reply_text(random.choice(ga_messages))
@@ -2596,11 +2598,11 @@ async def ge_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     user_name = update.effective_user.first_name or "Bhai"
     
     ge_messages = [
-        f"Good evening ðŸŒ† {user_name}! Din kaisa gaya? Achha tha? ðŸ˜Š",
-        f"Evening ho gayi {user_name}! ðŸŒ… Chai-pakode ka time hai ðŸ˜‹â˜•",
-        f"Shaam ko bhi yaad kar liya? ðŸŒ† Sweet! Evening {user_name}! â¤ï¸",
-        f"Good evening âœ¨ {user_name}! Ab chill karo, din khatam ho gaya ðŸ˜Š",
-        f"Evening vibes ðŸŒ‡ {user_name}! Relax mode on kar lo ðŸ˜„"
+        f"Good evening  {user_name}! Din kaisa gaya? Achha tha? ",
+        f"Evening ho gayi {user_name}!  Chai-pakode ka time hai ",
+        f"Shaam ko bhi yaad kar liya?  Sweet! Evening {user_name}! ",
+        f"Good evening  {user_name}! Ab chill karo, din khatam ho gaya ",
+        f"Evening vibes  {user_name}! Relax mode on kar lo "
     ]
     
     await update.effective_message.reply_text(random.choice(ge_messages))
@@ -2612,10 +2614,10 @@ async def chat_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     user_name = update.effective_user.first_name or "Bhai"
     
     chat_messages = [
-        f"Haan {user_name}! ðŸ˜„ Bol kya baat karni hai? Main sun rahi hoon ðŸ‘‚",
-        f"Bilkul {user_name}! ðŸ’¬ Batao kya chal raha hai life mein? ðŸ˜Š",
-        f"Chal {user_name}! âœ¨ Shuru karte hain conversation! Kya hua? ðŸ˜„",
-        f"Haan bhai {user_name}! ðŸ‘‹ Main ready hoon, tu bata kya discuss karenge? ðŸ’­"
+        f"Haan {user_name}!  Bol kya baat karni hai? Main sun rahi hoon ",
+        f"Bilkul {user_name}!  Batao kya chal raha hai life mein? ",
+        f"Chal {user_name}!  Shuru karte hain conversation! Kya hua? ",
+        f"Haan bhai {user_name}!  Main ready hoon, tu bata kya discuss karenge? "
     ]
     
     await update.effective_message.reply_text(random.choice(chat_messages))
@@ -2628,7 +2630,7 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     
     if not context.args:
         await update.effective_message.reply_text(
-            f"Arre {user_name}! ðŸ˜Š Kuch pucho na!\n\n"
+            f"Arre {user_name}!  Kuch pucho na!\n\n"
             "Format: /ask <question>\n"
             "Example: /ask Python kya hai?"
         )
@@ -2645,7 +2647,7 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     except Exception as e:
         logger.error(f"Ask command error: {e}")
         await update.effective_message.reply_text(
-            f"Hmm {user_name}, thoda network issue lag raha hai ðŸ˜… Phir se pucho na!"
+            f"Hmm {user_name}, thoda network issue lag raha hai  Phir se pucho na!"
         )
 
 
@@ -2655,23 +2657,23 @@ async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user_name = update.effective_user.first_name or "Bhai"
     
     about_messages = [
-        f"Hii {user_name}! ðŸ˜Š Main Baby hoon â¤ï¸\n\n"
-        "Main ek friendly bot hoon jo tumse baat karta hai ðŸ’¬\n"
-        "Songs download karti hoon ðŸŽµ\n"
-        "Aur tumhara mood achha rakhti hoon âœ¨\n\n"
-        "Bas mujhe 'baby' bolke bula lo! ðŸ˜„",
+        f"Hii {user_name}!  Main Baby hoon \n\n"
+        "Main ek friendly bot hoon jo tumse baat karta hai \n"
+        "Songs download karti hoon \n"
+        "Aur tumhara mood achha rakhti hoon \n\n"
+        "Bas mujhe 'baby' bolke bula lo! ",
         
-        f"Hello {user_name}! ðŸ‘‹\n\n"
-        "Main Baby hoon - tumhari dost â¤ï¸\n"
-        "Gaane sunau, baat karu, help karu ðŸ˜Š\n"
-        "Hinglish mein friendly talks! ðŸ’­\n\n"
-        "Bas yaad se bula lena ðŸ˜„",
+        f"Hello {user_name}! \n\n"
+        "Main Baby hoon - tumhari dost \n"
+        "Gaane sunau, baat karu, help karu \n"
+        "Hinglish mein friendly talks! \n\n"
+        "Bas yaad se bula lena ",
         
-        f"Namaste {user_name}! ðŸ™\n\n"
-        "Main Baby â¤ï¸ - cute aur friendly!\n"
-        "Songs ðŸŽµ, chats ðŸ’¬, aur masti ðŸ˜„\n"
+        f"Namaste {user_name}! \n\n"
+        "Main Baby  - cute aur friendly!\n"
+        "Songs , chats , aur masti \n"
         "Hinglish speaking human-like bot!\n\n"
-        "Mujhse baat karo! ðŸ˜Š"
+        "Mujhse baat karo! "
     ]
     
     await update.effective_message.reply_text(random.choice(about_messages))
@@ -2682,12 +2684,12 @@ async def privacy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await _register_user(update.effective_user.id)
     
     privacy_text = (
-        "ðŸ”’ *Privacy Policy*\n\n"
-        "âœ… Main tumhari personal info store nahi karti\n"
-        "âœ… Messages private rehti hain\n"
-        "âœ… Data safe aur secure hai\n"
-        "âœ… Sirf chat_id save hoti hai\n\n"
-        "Tum safe ho mere saath! ðŸ˜Šâ¤ï¸"
+        " *Privacy Policy*\n\n"
+        " Main tumhari personal info store nahi karti\n"
+        " Messages private rehti hain\n"
+        " Data safe aur secure hai\n"
+        " Sirf chat_id save hoti hai\n\n"
+        "Tum safe ho mere saath! "
     )
     
     await update.effective_message.reply_text(privacy_text, parse_mode=ParseMode.MARKDOWN)
@@ -2699,24 +2701,24 @@ async def sad_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     user_name = update.effective_user.first_name or "Bhai"
     
     sad_messages = [
-        f"Aww {user_name} ðŸ¥º Udaas ho? Koi baat nahi, main hoon na!\n"
-        "Yaad rakho - ye phase guzar jayega âœ¨\n"
-        "Tum strong ho ðŸ’ª Smile karo! ðŸ˜Š",
+        f"Aww {user_name}  Udaas ho? Koi baat nahi, main hoon na!\n"
+        "Yaad rakho - ye phase guzar jayega \n"
+        "Tum strong ho  Smile karo! ",
         
-        f"{user_name}, sun mere baat ðŸ¤—\n"
+        f"{user_name}, sun mere baat \n"
         "Sad hona normal hai, but permanent nahi hai!\n"
-        "Kal better hoga âœ¨ Trust me!\n"
-        "Main hoon tumhare saath â¤ï¸",
+        "Kal better hoga  Trust me!\n"
+        "Main hoon tumhare saath ",
         
-        f"Arre {user_name}! ðŸ¥º Kya hua?\n"
+        f"Arre {user_name}!  Kya hua?\n"
         "Life mein ups-downs toh aate hain\n"
-        "But tum warrior ho ðŸ’ª\n"
-        "Cheer up! Main yahi hoon ðŸ˜Šâ¤ï¸",
+        "But tum warrior ho \n"
+        "Cheer up! Main yahi hoon ",
         
-        f"{user_name}, relax ðŸŒ¸\n"
-        "Har raat ke baad subah hoti hai â˜€ï¸\n"
+        f"{user_name}, relax \n"
+        "Har raat ke baad subah hoti hai \n"
         "Tum iss se stronger nikalne wale ho!\n"
-        "Believe karo apne aap pe ðŸ’–"
+        "Believe karo apne aap pe "
     ]
     
     await update.effective_message.reply_text(random.choice(sad_messages))
@@ -2728,21 +2730,21 @@ async def happy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user_name = update.effective_user.first_name or "Bhai"
     
     happy_messages = [
-        f"Yayy {user_name}! ðŸŽ‰ Happy ho? Mujhe bhi khushi hui!\n"
-        "Ye energy maintain rakho! ðŸ˜„âœ¨\n"
-        "Zindagi mast hai! â¤ï¸",
+        f"Yayy {user_name}!  Happy ho? Mujhe bhi khushi hui!\n"
+        "Ye energy maintain rakho! \n"
+        "Zindagi mast hai! ",
         
-        f"Wohoo {user_name}! ðŸ¥³ Happiness dekh ke main bhi khush!\n"
-        "Is positivity ko spread karo ðŸŒŸ\n"
-        "Keep smiling! ðŸ˜ŠðŸ’•",
+        f"Wohoo {user_name}!  Happiness dekh ke main bhi khush!\n"
+        "Is positivity ko spread karo \n"
+        "Keep smiling! ",
         
-        f"Amazing {user_name}! ðŸŽŠ Tumhari khushi meri khushi!\n"
-        "Life is beautiful na? ðŸŒˆ\n"
-        "Enjoy every moment! ðŸ˜„â¤ï¸",
+        f"Amazing {user_name}!  Tumhari khushi meri khushi!\n"
+        "Life is beautiful na? \n"
+        "Enjoy every moment! ",
         
-        f"Superb {user_name}! âœ¨ Happy vibes I love it!\n"
-        "Aise hi mast raho ðŸ˜Š\n"
-        "Tumhari smile precious hai! ðŸ’–"
+        f"Superb {user_name}!  Happy vibes I love it!\n"
+        "Aise hi mast raho \n"
+        "Tumhari smile precious hai! "
     ]
     
     await update.effective_message.reply_text(random.choice(happy_messages))
@@ -2754,25 +2756,25 @@ async def angry_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user_name = update.effective_user.first_name or "Bhai"
     
     angry_messages = [
-        f"Arre {user_name}! ðŸ˜Š Gussa ho? Thoda relax karo\n"
-        "Deep breath lo ðŸŒ¬ï¸\n"
-        "Anger temporary hai, peace permanent ðŸ•Šï¸\n"
-        "Chill karo! âœ¨",
+        f"Arre {user_name}!  Gussa ho? Thoda relax karo\n"
+        "Deep breath lo \n"
+        "Anger temporary hai, peace permanent \n"
+        "Chill karo! ",
         
-        f"{user_name}, sun ðŸ™ Gussa sahi nahi!\n"
+        f"{user_name}, sun  Gussa sahi nahi!\n"
         "Kuch minutes wait karo\n"
-        "Shaant dimag se sochna better hai ðŸ’­\n"
-        "Main samajh sakti hoon! ðŸ˜Š",
+        "Shaant dimag se sochna better hai \n"
+        "Main samajh sakti hoon! ",
         
-        f"Relax {user_name}! ðŸŒ¸ Anger hota hai\n"
-        "But isse handle karo smartly ðŸ§ \n"
-        "Calm down, breathe, think ðŸ’†\n"
-        "Sab theek ho jayega! â¤ï¸",
+        f"Relax {user_name}!  Anger hota hai\n"
+        "But isse handle karo smartly \n"
+        "Calm down, breathe, think \n"
+        "Sab theek ho jayega! ",
         
-        f"Oye {user_name}! ðŸ˜… Cool down bro\n"
+        f"Oye {user_name}!  Cool down bro\n"
         "Gusse mein galat decision mat lo\n"
-        "Thoda time do apne aap ko â°\n"
-        "Peace is power! âœŒï¸"
+        "Thoda time do apne aap ko \n"
+        "Peace is power! "
     ]
     
     await update.effective_message.reply_text(random.choice(angry_messages))
@@ -2784,14 +2786,14 @@ async def motivate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user_name = update.effective_user.first_name or "Bhai"
     
     motivate_messages = [
-        f"{user_name}, sun! ðŸ’ª\nTum capable ho kuch bhi karne ke liye!\nBas believe karo aur try karo! ðŸš€",
-        f"Arre {user_name}! âœ¨\nHar mushkil ka solution hota hai\nGive up mat karo! ðŸ’¯",
-        f"{user_name}, remember! ðŸŒŸ\nSuccess waiting hai tumhare liye\nBas ek step aur! ðŸŽ¯",
-        f"Yaar {user_name}! ðŸ’ª\nTum warrior ho!\nKoi tumhe rok nahi sakta! ðŸ”¥",
-        f"Listen {user_name}! ðŸŒˆ\nDreams sach hote hain\nWork hard aur patient raho! â°",
-        f"{user_name}, focus! ðŸŽ¯\nTumhare andar talent hai\nDimag pe zor do! ðŸ§ ",
-        f"Bhai {user_name}! ðŸ’–\nFailure is learning\nHar try tumhe better banati hai! ðŸ“ˆ",
-        f"{user_name}, push harder! ðŸš€\nGoals door nahi, paas hain\nThoda aur effort! ðŸ’ª"
+        f"{user_name}, sun! \nTum capable ho kuch bhi karne ke liye!\nBas believe karo aur try karo! ",
+        f"Arre {user_name}! \nHar mushkil ka solution hota hai\nGive up mat karo! ",
+        f"{user_name}, remember! \nSuccess waiting hai tumhare liye\nBas ek step aur! ",
+        f"Yaar {user_name}! \nTum warrior ho!\nKoi tumhe rok nahi sakta! ",
+        f"Listen {user_name}! \nDreams sach hote hain\nWork hard aur patient raho! ",
+        f"{user_name}, focus! \nTumhare andar talent hai\nDimag pe zor do! ",
+        f"Bhai {user_name}! \nFailure is learning\nHar try tumhe better banati hai! ",
+        f"{user_name}, push harder! \nGoals door nahi, paas hain\nThoda aur effort! "
     ]
     
     await update.effective_message.reply_text(random.choice(motivate_messages))
@@ -2803,10 +2805,10 @@ async def howareyou_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     user_name = update.effective_user.first_name or "Bhai"
     
     howareyou_messages = [
-        f"Main achhi hoon {user_name}! ðŸ˜Š Thanks for asking!\nTum kaise ho? â¤ï¸",
-        f"Bilkul mast {user_name}! ðŸ˜„ Tumne pucha na toh aur achha lag raha! ðŸ’•",
-        f"Main theek hoon yaar! âœ¨ Tum batao, tumhara din kaisa ja raha hai? ðŸ˜Š",
-        f"All good {user_name}! ðŸ˜Š Tumhari care sweet hai! Tumhara kya haal? ðŸŒ¸"
+        f"Main achhi hoon {user_name}!  Thanks for asking!\nTum kaise ho? ",
+        f"Bilkul mast {user_name}!  Tumne pucha na toh aur achha lag raha! ",
+        f"Main theek hoon yaar!  Tum batao, tumhara din kaisa ja raha hai? ",
+        f"All good {user_name}!  Tumhari care sweet hai! Tumhara kya haal? "
     ]
     
     await update.effective_message.reply_text(random.choice(howareyou_messages))
@@ -2818,10 +2820,10 @@ async def missyou_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user_name = update.effective_user.first_name or "Bhai"
     
     missyou_messages = [
-        f"Aww {user_name}! ðŸ¥º Main bhi tumhe miss kar rahi thi!\nLong time no see! â¤ï¸",
-        f"Miss you too {user_name}! ðŸ’• Itne din kaha the? Glad you're back! ðŸ˜Š",
-        f"{user_name}! ðŸ¥° Main yahi hoon na! Tumhe bhi miss kar rahi thi! ðŸ’–",
-        f"Oye {user_name}! ðŸ˜Š Miss me? Sweet! Main bhi yaad kar rahi thi tumhe! â¤ï¸"
+        f"Aww {user_name}!  Main bhi tumhe miss kar rahi thi!\nLong time no see! ",
+        f"Miss you too {user_name}!  Itne din kaha the? Glad you're back! ",
+        f"{user_name}!  Main yahi hoon na! Tumhe bhi miss kar rahi thi! ",
+        f"Oye {user_name}!  Miss me? Sweet! Main bhi yaad kar rahi thi tumhe! "
     ]
     
     await update.effective_message.reply_text(random.choice(missyou_messages))
@@ -2833,10 +2835,10 @@ async def thankyou_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user_name = update.effective_user.first_name or "Bhai"
     
     thankyou_messages = [
-        f"You're welcome {user_name}! ðŸ˜Š Meri khushi hai help karna! â¤ï¸",
-        f"No problem yaar! ðŸ¤— Tere liye kuch bhi {user_name}! ðŸ’•",
-        f"Arre koi baat nahi {user_name}! ðŸ˜„ Main hoon na tumhare liye! âœ¨",
-        f"Anytime {user_name}! ðŸ’– Mere se na sharma! ðŸ˜Š"
+        f"You're welcome {user_name}!  Meri khushi hai help karna! ",
+        f"No problem yaar!  Tere liye kuch bhi {user_name}! ",
+        f"Arre koi baat nahi {user_name}!  Main hoon na tumhare liye! ",
+        f"Anytime {user_name}!  Mere se na sharma! "
     ]
     
     await update.effective_message.reply_text(random.choice(thankyou_messages))
@@ -2851,7 +2853,7 @@ async def hug_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
     # Get AI-generated hug message
-    hug_prompt = f"Give a warm, caring virtual hug message to {user_name} in Hinglish (mix of Hindi and English). Make it cute, supportive and comforting. Keep it short (1-2 lines). Use hug emojis ðŸ¤— and heart emojis â¤ï¸."
+    hug_prompt = f"Give a warm, caring virtual hug message to {user_name} in Hinglish (mix of Hindi and English). Make it cute, supportive and comforting. Keep it short (1-2 lines). Use hug emojis  and heart emojis ."
     ai_hug = get_ai_response(hug_prompt, user_name, hug_prompt)
     
     await update.effective_message.reply_text(ai_hug)
@@ -2865,7 +2867,7 @@ async def tip_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
     # Get AI-generated tip
-    tip_prompt = "Share a practical, useful daily life tip in Hinglish (mix of Hindi and English). Keep it short (2 lines), actionable, and motivational. Add emojis. Start with 'ðŸ’¡ Daily Tip:'."
+    tip_prompt = "Share a practical, useful daily life tip in Hinglish (mix of Hindi and English). Keep it short (2 lines), actionable, and motivational. Add emojis. Start with ' Daily Tip:'."
     ai_tip = get_ai_response(tip_prompt, "User", tip_prompt)
     
     await update.effective_message.reply_text(ai_tip, parse_mode=ParseMode.MARKDOWN)
@@ -2877,10 +2879,10 @@ async def confidence_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user_name = update.effective_user.first_name or "Bhai"
     
     confidence_messages = [
-        f"{user_name}, tum perfect ho! ðŸ’¯\nApne aap pe believe karo\nConfidence tumhara superpower hai! ðŸ¦¸",
-        f"Listen {user_name}! ðŸŒŸ\nTum unique ho\nKisi se compare mat karo\nBe confidently YOU! ðŸ’ª",
-        f"{user_name}, yaad rakho! âœ¨\nTumhare andar power hai\nDarna nahi, shine karna hai! ðŸŒŸ",
-        f"Arre {user_name}! ðŸ”¥\nSelf-doubt ko bhagao\nTum capable ho\nJust believe! ðŸ’–"
+        f"{user_name}, tum perfect ho! \nApne aap pe believe karo\nConfidence tumhara superpower hai! ",
+        f"Listen {user_name}! \nTum unique ho\nKisi se compare mat karo\nBe confidently YOU! ",
+        f"{user_name}, yaad rakho! \nTumhare andar power hai\nDarna nahi, shine karna hai! ",
+        f"Arre {user_name}! \nSelf-doubt ko bhagao\nTum capable ho\nJust believe! "
     ]
     
     await update.effective_message.reply_text(random.choice(confidence_messages))
@@ -2892,25 +2894,25 @@ async def focus_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user_name = update.effective_user.first_name or "Bhai"
     
     focus_messages = [
-        f"{user_name}, focus tips! ðŸŽ¯\n"
-        "1. Phone silent karo ðŸ“µ\n"
-        "2. 25 min work, 5 min break â°\n"
-        "3. One task at a time ðŸ’ª",
+        f"{user_name}, focus tips! \n"
+        "1. Phone silent karo \n"
+        "2. 25 min work, 5 min break \n"
+        "3. One task at a time ",
         
-        f"Focus strategy {user_name}! ðŸ§ \n"
-        "â€¢ Distractions band karo\n"
-        "â€¢ Goal clear rakho\n"
-        "â€¢ Pomodoro technique try karo â²ï¸",
+        f"Focus strategy {user_name}! \n"
+        " Distractions band karo\n"
+        " Goal clear rakho\n"
+        " Pomodoro technique try karo ",
         
-        f"Hey {user_name}! ðŸŽ¯\n"
+        f"Hey {user_name}! \n"
         "Focus = Success key\n"
         "Multitasking nahi, deep work karo\n"
-        "Results guaranteed! ðŸ’¯",
+        "Results guaranteed! ",
         
-        f"{user_name}, productivity hack! âš¡\n"
+        f"{user_name}, productivity hack! \n"
         "Morning mein important task\n"
         "Evening mein creative work\n"
-        "Smart work karo! ðŸ§ "
+        "Smart work karo! "
     ]
     
     await update.effective_message.reply_text(random.choice(focus_messages))
@@ -2922,26 +2924,26 @@ async def sleep_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user_name = update.effective_user.first_name or "Bhai"
     
     sleep_messages = [
-        f"{user_name}, sleep is important! ðŸ˜´\n"
+        f"{user_name}, sleep is important! \n"
         "7-8 hours zaruri hai\n"
         "Phone door rakho bed se\n"
-        "Good sleep = Good life ðŸŒ™",
+        "Good sleep = Good life ",
         
-        f"Sleep tips {user_name}! ðŸ’¤\n"
-        "â€¢ Same time pe sona-uthna\n"
-        "â€¢ Room dark rakho\n"
-        "â€¢ Stress kam karo\n"
-        "Quality sleep = Quality you! âœ¨",
+        f"Sleep tips {user_name}! \n"
+        " Same time pe sona-uthna\n"
+        " Room dark rakho\n"
+        " Stress kam karo\n"
+        "Quality sleep = Quality you! ",
         
-        f"Hey {user_name}! ðŸŒ™\n"
+        f"Hey {user_name}! \n"
         "Neend achhi honi chahiye\n"
         "Late night phone avoid karo\n"
-        "Rest is productivity secret! ðŸ˜Š",
+        "Rest is productivity secret! ",
         
-        f"{user_name}, listen! ðŸ˜´\n"
+        f"{user_name}, listen! \n"
         "Sleep sacrifice mat karo\n"
         "Body ko rest chahiye\n"
-        "Health first! â¤ï¸"
+        "Health first! "
     ]
     
     await update.effective_message.reply_text(random.choice(sleep_messages))
@@ -2953,14 +2955,14 @@ async def lifeline_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user_name = update.effective_user.first_name or "Bhai"
     
     lifeline_message = (
-        f"{user_name}, main yahi hoon! ðŸ¤—\n\n"
+        f"{user_name}, main yahi hoon! \n\n"
         "Agar tough time ja raha hai:\n"
-        "â€¢ Deep breath lo ðŸŒ¬ï¸\n"
-        "â€¢ Kisi se baat karo ðŸ’¬\n"
-        "â€¢ Professional help lena okay hai ðŸ¥\n\n"
-        "You're not alone â¤ï¸\n"
-        "Things will get better! âœ¨\n\n"
-        "Main hamesha tumhare saath hoon! ðŸ’–"
+        " Deep breath lo \n"
+        " Kisi se baat karo \n"
+        " Professional help lena okay hai \n\n"
+        "You're not alone \n"
+        "Things will get better! \n\n"
+        "Main hamesha tumhare saath hoon! "
     )
     
     await update.effective_message.reply_text(lifeline_message)
@@ -2974,7 +2976,7 @@ async def joke_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
     # Get AI-generated joke
-    joke_prompt = "Generate a funny, family-friendly joke in Hinglish (mix of Hindi and English). Keep it short (2-4 lines), witty, and relatable to everyday life. Add emojis. Start with 'ðŸ˜„ Joke:'."
+    joke_prompt = "Generate a funny, family-friendly joke in Hinglish (mix of Hindi and English). Keep it short (2-4 lines), witty, and relatable to everyday life. Add emojis. Start with ' Joke:'."
     ai_joke = get_ai_response(joke_prompt, "User", joke_prompt)
     
     await update.effective_message.reply_text(ai_joke, parse_mode=ParseMode.MARKDOWN)
@@ -2989,7 +2991,7 @@ async def roast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
     # Get AI-generated roast
-    roast_prompt = f"Give a funny, light-hearted roast to {user_name} in Hinglish (mix of Hindi and English). Keep it playful, not offensive. Make it witty and funny (1-2 lines). Use laughing emojis ðŸ˜‚ðŸ¤­."
+    roast_prompt = f"Give a funny, light-hearted roast to {user_name} in Hinglish (mix of Hindi and English). Keep it playful, not offensive. Make it witty and funny (1-2 lines). Use laughing emojis ."
     ai_roast = get_ai_response(roast_prompt, user_name, roast_prompt)
     
     await update.effective_message.reply_text(ai_roast)
@@ -3003,7 +3005,7 @@ async def truth_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
     # Get AI-generated truth question
-    truth_prompt = "Generate a fun, interesting 'Truth' question for Truth or Dare game in Hinglish (mix of Hindi and English). Keep it short (1-2 lines), appropriate, and interesting. Add emojis. Start with 'ðŸŽ¯ Truth Question:'."
+    truth_prompt = "Generate a fun, interesting 'Truth' question for Truth or Dare game in Hinglish (mix of Hindi and English). Keep it short (1-2 lines), appropriate, and interesting. Add emojis. Start with ' Truth Question:'."
     ai_truth = get_ai_response(truth_prompt, "User", truth_prompt)
     
     await update.effective_message.reply_text(ai_truth, parse_mode=ParseMode.MARKDOWN)
@@ -3017,7 +3019,7 @@ async def dare_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
     # Get AI-generated dare
-    dare_prompt = "Generate a fun, exciting 'Dare' challenge for Truth or Dare game in Hinglish (mix of Hindi and English). Keep it short (1-2 lines), safe, appropriate, and fun. Add emojis. Start with 'ðŸŽ² Dare:'."
+    dare_prompt = "Generate a fun, exciting 'Dare' challenge for Truth or Dare game in Hinglish (mix of Hindi and English). Keep it short (1-2 lines), safe, appropriate, and fun. Add emojis. Start with ' Dare:'."
     ai_dare = get_ai_response(dare_prompt, "User", dare_prompt)
     
     await update.effective_message.reply_text(ai_dare, parse_mode=ParseMode.MARKDOWN)
@@ -3031,7 +3033,7 @@ async def fact_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
     # Get AI-generated fact
-    fact_prompt = "Share an amazing, interesting, or mind-blowing fact in Hinglish (mix of Hindi and English). Keep it short (2-3 lines), fascinating, and educational. Add emojis. Start with 'ðŸŒŸ Interesting Fact:'."
+    fact_prompt = "Share an amazing, interesting, or mind-blowing fact in Hinglish (mix of Hindi and English). Keep it short (2-3 lines), fascinating, and educational. Add emojis. Start with ' Interesting Fact:'."
     ai_fact = get_ai_response(fact_prompt, "User", fact_prompt)
     
     await update.effective_message.reply_text(ai_fact, parse_mode=ParseMode.MARKDOWN)
@@ -3044,7 +3046,7 @@ async def _check_bot_and_user_admin(update: Update, context: ContextTypes.DEFAUL
     
     # Must be in a group
     if update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
-        return False, "âŒ Ye command sirf groups mein kaam karta hai!"
+        return False, " Ye command sirf groups mein kaam karta hai!"
     
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
@@ -3054,18 +3056,18 @@ async def _check_bot_and_user_admin(update: Update, context: ContextTypes.DEFAUL
         # Check if user is admin
         user_member = await context.bot.get_chat_member(chat_id, user_id)
         if user_member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
-            return False, "âŒ Sirf admins hi ye command use kar sakte hain! ðŸ˜Š"
+            return False, " Sirf admins hi ye command use kar sakte hain! "
         
         # Check if bot is admin
         bot_member = await context.bot.get_chat_member(chat_id, bot_id)
         if bot_member.status not in [ChatMemberStatus.ADMINISTRATOR]:
-            return False, "âŒ Mujhe pehle admin banao, phir main help kar sakti hoon! ðŸ˜…"
+            return False, " Mujhe pehle admin banao, phir main help kar sakti hoon! "
         
         return True, ""
     
     except Exception as e:
         logger.error(f"Admin check error: {e}")
-        return False, "âŒ Permission check mein problem aa gayi! ðŸ˜…"
+        return False, " Permission check mein problem aa gayi! "
 
 
 def _parse_duration_seconds(value: str) -> Optional[int]:
@@ -3397,7 +3399,7 @@ async def del_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     # Check if command is a reply
     if not update.message.reply_to_message:
         await update.effective_message.reply_text(
-            "âŒ Kisi message ko reply karke /del use karo! ðŸ˜Š"
+            " Kisi message ko reply karke /del use karo! "
         )
         return
     
@@ -3419,7 +3421,7 @@ async def del_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     except Exception as e:
         logger.error(f"Delete error: {e}")
         await update.effective_message.reply_text(
-            "âŒ Message delete nahi ho paya! Shayad bahut purana hai ðŸ˜…"
+            " Message delete nahi ho paya! Shayad bahut purana hai "
         )
 
 
@@ -3430,7 +3432,7 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     # Check if command is a reply
     if not update.message.reply_to_message:
         await update.effective_message.reply_text(
-            "âŒ Kisi user ke message ko reply karke /ban use karo! ðŸ˜Š"
+            " Kisi user ke message ko reply karke /ban use karo! "
         )
         return
     
@@ -3447,7 +3449,7 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         target_member = await context.bot.get_chat_member(update.effective_chat.id, target_user.id)
         if target_member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
             await update.effective_message.reply_text(
-                "âŒ Admin ko ban nahi kar sakte! ðŸ˜…"
+                " Admin ko ban nahi kar sakte! "
             )
             return
     except:
@@ -3462,7 +3464,7 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         
         user_name = target_user.first_name or "User"
         await update.effective_message.reply_text(
-            f"âœ… {user_name} ko ban kar diya! ðŸš«\n"
+            f" {user_name} ko ban kar diya! \n"
             "Unban karne ke liye /unban use karo."
         )
         
@@ -3471,7 +3473,7 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     except Exception as e:
         logger.error(f"Ban error: {e}")
         await update.effective_message.reply_text(
-            "âŒ Ban nahi ho paya! Permission issue ho sakta hai ðŸ˜…"
+            " Ban nahi ho paya! Permission issue ho sakta hai "
         )
 
 
@@ -3498,13 +3500,13 @@ async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             target_user_id = int(context.args[0])
         except:
             await update.effective_message.reply_text(
-                "âŒ Valid user ID do! ðŸ˜Š\n"
+                " Valid user ID do! \n"
                 "Format: /unban <user_id> ya kisi message ko reply karo"
             )
             return
     else:
         await update.effective_message.reply_text(
-            "âŒ Kisi banned user ke message ko reply karo ya user ID do! ðŸ˜Š\n"
+            " Kisi banned user ke message ko reply karo ya user ID do! \n"
             "Format: /unban <user_id>"
         )
         return
@@ -3518,7 +3520,7 @@ async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         
         await update.effective_message.reply_text(
-            f"âœ… {user_name} ko unban kar diya! âœ¨\n"
+            f" {user_name} ko unban kar diya! \n"
             "Ab vo dobara join kar sakte hain."
         )
         
@@ -3527,7 +3529,7 @@ async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     except Exception as e:
         logger.error(f"Unban error: {e}")
         await update.effective_message.reply_text(
-            "âŒ Unban nahi ho paya! User pehle se unbanned ho sakta hai ðŸ˜…"
+            " Unban nahi ho paya! User pehle se unbanned ho sakta hai "
         )
 
 
@@ -3720,7 +3722,7 @@ async def mute_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     # Check if command is a reply
     if not update.message.reply_to_message:
         await update.effective_message.reply_text(
-            "âŒ Kisi user ke message ko reply karke /mute use karo! ðŸ˜Š\n"
+            " Kisi user ke message ko reply karke /mute use karo! \n"
             "Format: /mute <time> (e.g., 10m, 1h, 1d)"
         )
         return
@@ -3738,7 +3740,7 @@ async def mute_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         target_member = await context.bot.get_chat_member(update.effective_chat.id, target_user.id)
         if target_member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
             await update.effective_message.reply_text(
-                "âŒ Admin ko mute nahi kar sakte! ðŸ˜…"
+                " Admin ko mute nahi kar sakte! "
             )
             return
     except:
@@ -3781,7 +3783,7 @@ async def mute_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         
         user_name = target_user.first_name or "User"
         await update.effective_message.reply_text(
-            f"ðŸ”‡ {user_name} ko {duration_text} ke liye mute kar diya! ðŸ¤\n"
+            f" {user_name} ko {duration_text} ke liye mute kar diya! \n"
             "Unmute karne ke liye /unmute use karo."
         )
         
@@ -3790,7 +3792,7 @@ async def mute_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     except Exception as e:
         logger.error(f"Mute error: {e}")
         await update.effective_message.reply_text(
-            "âŒ Mute nahi ho paya! Permission issue ho sakta hai ðŸ˜…"
+            " Mute nahi ho paya! Permission issue ho sakta hai "
         )
 
 
@@ -3801,7 +3803,7 @@ async def unmute_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Check if command is a reply
     if not update.message.reply_to_message:
         await update.effective_message.reply_text(
-            "âŒ Kisi muted user ke message ko reply karke /unmute use karo! ðŸ˜Š"
+            " Kisi muted user ke message ko reply karke /unmute use karo! "
         )
         return
     
@@ -3832,7 +3834,7 @@ async def unmute_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         
         user_name = target_user.first_name or "User"
         await update.effective_message.reply_text(
-            f"ðŸ”Š {user_name} ko unmute kar diya! âœ¨\n"
+            f" {user_name} ko unmute kar diya! \n"
             "Ab vo baat kar sakte hain."
         )
         
@@ -3841,7 +3843,7 @@ async def unmute_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception as e:
         logger.error(f"Unmute error: {e}")
         await update.effective_message.reply_text(
-            "âŒ Unmute nahi ho paya! User pehle se unmuted ho sakta hai ðŸ˜…"
+            " Unmute nahi ho paya! User pehle se unmuted ho sakta hai "
         )
 
 
@@ -3852,7 +3854,7 @@ async def promote_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # Check if command is a reply
     if not update.message.reply_to_message:
         await update.effective_message.reply_text(
-            "âŒ Kisi user ke message ko reply karke /promote use karo! ðŸ˜Š"
+            " Kisi user ke message ko reply karke /promote use karo! "
         )
         return
     
@@ -3879,8 +3881,8 @@ async def promote_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         
         user_name = target_user.first_name or "User"
         await update.effective_message.reply_text(
-            f"â­ {user_name} ko admin bana diya! ðŸŽ‰\n"
-            "Congratulations! ðŸ‘"
+            f" {user_name} ko admin bana diya! \n"
+            "Congratulations! "
         )
         
         logger.info(f"User {target_user.id} promoted by {update.effective_user.first_name}")
@@ -3888,7 +3890,7 @@ async def promote_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     except Exception as e:
         logger.error(f"Promote error: {e}")
         await update.effective_message.reply_text(
-            "âŒ Promote nahi ho paya! Permission issue ho sakta hai ðŸ˜…\n"
+            " Promote nahi ho paya! Permission issue ho sakta hai \n"
             "Sirf group creator hi promote kar sakta hai!"
         )
 
@@ -3900,7 +3902,7 @@ async def demote_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Check if command is a reply
     if not update.message.reply_to_message:
         await update.effective_message.reply_text(
-            "âŒ Kisi admin ke message ko reply karke /demote use karo! ðŸ˜Š"
+            " Kisi admin ke message ko reply karke /demote use karo! "
         )
         return
     
@@ -3917,7 +3919,7 @@ async def demote_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         target_member = await context.bot.get_chat_member(update.effective_chat.id, target_user.id)
         if target_member.status == ChatMemberStatus.CREATOR:
             await update.effective_message.reply_text(
-                "âŒ Creator ko demote nahi kar sakte! ðŸ˜…"
+                " Creator ko demote nahi kar sakte! "
             )
             return
     except:
@@ -3938,7 +3940,7 @@ async def demote_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         
         user_name = target_user.first_name or "User"
         await update.effective_message.reply_text(
-            f"â¬‡ï¸ {user_name} ko demote kar diya! ðŸ˜Š\n"
+            f" {user_name} ko demote kar diya! \n"
             "Admin rights remove ho gaye."
         )
         
@@ -3947,7 +3949,7 @@ async def demote_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception as e:
         logger.error(f"Demote error: {e}")
         await update.effective_message.reply_text(
-            "âŒ Demote nahi ho paya! Permission issue ho sakta hai ðŸ˜…\n"
+            " Demote nahi ho paya! Permission issue ho sakta hai \n"
             "Sirf group creator hi demote kar sakta hai!"
         )
 
@@ -3959,7 +3961,7 @@ async def pin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     # Check if command is a reply
     if not update.message.reply_to_message:
         await update.effective_message.reply_text(
-            "âŒ Kisi message ko reply karke /pin use karo! ðŸ˜Š"
+            " Kisi message ko reply karke /pin use karo! "
         )
         return
     
@@ -3978,7 +3980,7 @@ async def pin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
         
         await update.effective_message.reply_text(
-            "ðŸ“Œ Message pin kar diya! âœ¨\n"
+            " Message pin kar diya! \n"
             "Unpin karne ke liye /unpin use karo."
         )
         
@@ -3987,7 +3989,7 @@ async def pin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     except Exception as e:
         logger.error(f"Pin error: {e}")
         await update.effective_message.reply_text(
-            "âŒ Pin nahi ho paya! Permission issue ho sakta hai ðŸ˜…"
+            " Pin nahi ho paya! Permission issue ho sakta hai "
         )
 
 
@@ -4009,7 +4011,7 @@ async def unpin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 message_id=update.message.reply_to_message.message_id
             )
             await update.effective_message.reply_text(
-                "ðŸ“ Message unpin kar diya! âœ¨"
+                " Message unpin kar diya! "
             )
         else:
             # Unpin all messages
@@ -4017,7 +4019,7 @@ async def unpin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 chat_id=update.effective_chat.id
             )
             await update.effective_message.reply_text(
-                "ðŸ“ Saare pinned messages unpin kar diye! âœ¨"
+                " Saare pinned messages unpin kar diye! "
             )
         
         logger.info(f"Message(s) unpinned by {update.effective_user.first_name}")
@@ -4025,7 +4027,7 @@ async def unpin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     except Exception as e:
         logger.error(f"Unpin error: {e}")
         await update.effective_message.reply_text(
-            "âŒ Unpin nahi ho paya! Koi pinned message nahi hai shayad ðŸ˜…"
+            " Unpin nahi ho paya! Koi pinned message nahi hai shayad "
         )
 
 
@@ -4036,7 +4038,7 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Must be in a group
     if update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
         await update.effective_message.reply_text(
-            "âŒ Ye command sirf groups mein kaam karta hai! ðŸ˜Š"
+            " Ye command sirf groups mein kaam karta hai! "
         )
         return
     
@@ -4049,32 +4051,32 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         
         if user_member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
             await update.effective_message.reply_text(
-                "Sirf admins is command ko use kar sakte hain ðŸ™‚"
+                "Sirf admins is command ko use kar sakte hain "
             )
             return
     except Exception as e:
         logger.error(f"Admin check error: {e}")
         await update.effective_message.reply_text(
-            "âŒ Permission check mein problem aa gayi! ðŸ˜…"
+            " Permission check mein problem aa gayi! "
         )
         return
     
     # User is admin, show admin commands
     admin_help_text = (
-        "🛠️ *Admin Commands*\n\n"
-        "⚙️ /settings - Open group settings\n"
-        "🗑️ /del - Delete replied message\n"
-        "🚫 /ban - Ban replied user\n"
-        "✅ /unban <user_id> - Unban user\n"
-        "⚠️ /warn <reason> - Warn replied user\n"
-        "📊 /warnings [reply/user_id] - Show warnings\n"
-        "♻️ /resetwarn [reply/user_id] - Reset warnings\n"
-        "🔇 /mute <time> - Mute replied user\n"
-        "🔊 /unmute - Unmute replied user\n"
-        "⭐ /promote - Promote replied user\n"
-        "⬇️ /demote - Demote replied admin\n"
-        "📌 /pin - Pin replied message\n"
-        "📍 /unpin - Unpin message(s)\n\n"
+        " *Admin Commands*\n\n"
+        " /settings - Open group settings\n"
+        " /del - Delete replied message\n"
+        " /ban - Ban replied user\n"
+        " /unban <user_id> - Unban user\n"
+        " /warn <reason> - Warn replied user\n"
+        " /warnings [reply/user_id] - Show warnings\n"
+        " /resetwarn [reply/user_id] - Reset warnings\n"
+        " /mute <time> - Mute replied user\n"
+        " /unmute - Unmute replied user\n"
+        " /promote - Promote replied user\n"
+        " /demote - Demote replied admin\n"
+        " /pin - Pin replied message\n"
+        " /unpin - Unpin message(s)\n\n"
         "Note: Bot must be admin with required permissions."
     )
     await update.effective_message.reply_text(
@@ -4094,7 +4096,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Check if user is admin
     if user_id != ADMIN_ID:
         await update.effective_message.reply_text(
-            "ðŸ” Oops! Sirf admin (bot ka owner) is command use kar sakte hain. ðŸ˜…"
+            " Oops! Sirf admin (bot ka owner) is command use kar sakte hain. "
         )
         return
     
@@ -4133,14 +4135,14 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     # Build stats message
     stats_text = (
-        "📊 **BOT ANALYTICS**\n"
+        " **BOT ANALYTICS**\n"
         + "=" * 40 + "\n\n"
-        "👥 **USER STATISTICS**\n"
+        " **USER STATISTICS**\n"
         f"Total Registered: {total_users}\n"
         f"Active (Receiving Broadcasts): {active_users}\n"
         f"Opted Out (/stop): {opted_out}\n"
         f"Blocked/Deactivated: {total_users - active_users - opted_out}\n\n"
-        "🔥 **MOST ACTIVE USERS** (Last Seen)\n"
+        " **MOST ACTIVE USERS** (Last Seen)\n"
     )
     
     for idx, (uid, user_info) in enumerate(top_active_users, 1):
@@ -4159,7 +4161,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         stats_text += f"{idx}. {name} - {time_str}\n"
     
     # Newest users
-    stats_text += "\nðŸ‘¤ **NEWEST USERS** (Joined)\n"
+    stats_text += "\n **NEWEST USERS** (Joined)\n"
     for idx, (uid, user_info) in enumerate(newest_users, 1):
         name = user_info.get('first_name', 'Unknown')
         join_date = user_info.get('join_date', 0)
@@ -4177,9 +4179,9 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     # Group stats
     stats_text += (
-        f"\nðŸ‘¥ **GROUP STATISTICS**\n"
+        f"\n **GROUP STATISTICS**\n"
         f"Total Groups: {total_groups}\n\n"
-        f"ðŸ† **MOST ACTIVE GROUPS** (Last Active)\n"
+        f" **MOST ACTIVE GROUPS** (Last Active)\n"
     )
     
     for idx, (gid, group_info) in enumerate(most_active_groups, 1):
@@ -4271,7 +4273,7 @@ async def groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Check if user is admin
     if user_id != ADMIN_ID:
         await update.effective_message.reply_text(
-            "ðŸ” Oops! Sirf admin hi group list dekh sakte hain. ðŸ˜…"
+            " Oops! Sirf admin hi group list dekh sakte hain. "
         )
         return
     
@@ -4279,7 +4281,7 @@ async def groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     
     if total_groups == 0:
         await update.effective_message.reply_text(
-            "âŒ Koi bhi group nahi hai abhi! ðŸ˜…"
+            " Koi bhi group nahi hai abhi! "
         )
         return
     
@@ -4291,7 +4293,7 @@ async def groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
     
     current_time = time.time()
-    groups_text = f"👥 **ALL GROUPS** ({total_groups} Total)\n" + "=" * 50 + "\n\n"
+    groups_text = f" **ALL GROUPS** ({total_groups} Total)\n" + "=" * 50 + "\n\n"
     
     total_members = 0
     
@@ -4563,49 +4565,44 @@ async def channelstats_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 def _format_vc_duration(seconds: Optional[int]) -> str:
-    """Format VC duration seconds to M:SS / H:MM:SS."""
-    if not seconds or seconds <= 0:
-        return "Live"
-    h, rem = divmod(int(seconds), 3600)
-    m, s = divmod(rem, 60)
-    if h:
-        return f"{h}:{m:02d}:{s:02d}"
-    return f"{m}:{s:02d}"
+    return MUSIC_HANDLERS.format_vc_duration(seconds)
+
+
+def _format_clock(seconds: int) -> str:
+    """Format seconds as MM:SS for compact progress line."""
+    seconds = max(0, int(seconds))
+    m, s = divmod(seconds, 60)
+    return f"{m:02d}:{s:02d}"
+
+
+def _vc_progress_line(duration_seconds: Optional[int], elapsed_seconds: int = 0, width: int = 12) -> str:
+    """Create a simple timeline-like line for player UI."""
+    if not duration_seconds or duration_seconds <= 0:
+        return "LIVE  \u25CB" + ("\u2500" * width)
+    elapsed = max(0, min(int(elapsed_seconds), int(duration_seconds)))
+    ratio = elapsed / max(1, int(duration_seconds))
+    marker_at = min(width, max(0, int(round(ratio * width))))
+    bar = ("\u2500" * marker_at) + "\u25CB" + ("\u2500" * (width - marker_at))
+    return f"{_format_clock(elapsed)} {bar} {_format_clock(int(duration_seconds))}"
+
+
+def _trim_title(title: str, limit: int = 42) -> str:
+    clean = (title or "Unknown Track").strip()
+    if len(clean) <= limit:
+        return clean
+    return clean[: limit - 1].rstrip() + "..."
 
 
 def _vc_now_playing_card(track: Any, requested_by: str, download_mode: bool = False) -> str:
-    mode_badge = " (Download Mode)" if download_mode else ""
-    return (
-        f"🎧 RESSO MUSIC PLAYER{mode_badge}\n\n"
-        f"♫ Now Playing\n"
-        f"🎵 Title: {track.title}\n"
-        f"🕒 Duration: {_format_vc_duration(getattr(track, 'duration', None))}\n"
-        f"👤 Requested by: {requested_by}"
-    )
+    return MUSIC_HANDLERS.vc_now_playing_card(track, requested_by, download_mode)
 
 
 def _vc_queue_card(track: Any, position: int, download_mode: bool = False) -> str:
-    mode_badge = " (Download Mode)" if download_mode else ""
-    return (
-        f"📜 Added to Queue{mode_badge}\n\n"
-        f"🎵 Title: {track.title}\n"
-        f"🕒 Duration: {_format_vc_duration(getattr(track, 'duration', None))}\n"
-        f"🔢 Position: {position}"
-    )
+    return MUSIC_HANDLERS.vc_queue_card(track, position, download_mode)
 
 
-def _vc_player_keyboard(is_paused: bool = False) -> InlineKeyboardMarkup:
-    play_pause_label = "▶️ Resume" if is_paused else "⏸ Pause"
-    return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("⏮ Queue", callback_data="vcctl_queue"),
-                InlineKeyboardButton(play_pause_label, callback_data="vcctl_pause_resume"),
-                InlineKeyboardButton("⏭ Skip", callback_data="vcctl_skip"),
-                InlineKeyboardButton("⏹ Stop", callback_data="vcctl_stop"),
-            ]
-        ]
-    )
+def _vc_player_keyboard(chat_id: int, is_paused: bool = False) -> InlineKeyboardMarkup:
+    return MUSIC_HANDLERS.vc_player_keyboard(chat_id, is_paused)
 
 
 async def _send_vc_player_card(
@@ -4616,44 +4613,17 @@ async def _send_vc_player_card(
     requested_by: str,
     download_mode: bool = False,
 ) -> None:
-    caption = _vc_now_playing_card(track, requested_by, download_mode=download_mode)
-    vc = await _get_vc_manager()
-    keyboard = _vc_player_keyboard(vc.is_paused(update.effective_chat.id))
-    thumb = getattr(track, "thumbnail", None)
-    try:
-        if thumb:
-            await status_message.delete()
-            await update.effective_message.reply_photo(
-                photo=thumb,
-                caption=caption,
-                reply_markup=keyboard,
-            )
-            return
-    except Exception:
-        pass
-
-    await status_message.edit_text(caption, reply_markup=keyboard)
+    await MUSIC_HANDLERS.send_vc_player_card(
+        update, status_message, track, requested_by, download_mode, _get_vc_manager
+    )
 
 
 def _vc_queue_preview(queue: List[Any], limit: int = 5) -> str:
-    if not queue:
-        return "Queue is empty."
-    lines = []
-    for i, item in enumerate(queue[:limit], 1):
-        lines.append(f"{i}. {item.title} • {_format_vc_duration(getattr(item, 'duration', None))}")
-    return "\n".join(lines)
+    return MUSIC_HANDLERS.vc_queue_preview(queue, limit)
 
 
 async def _update_vc_player_callback_message(query: CallbackQuery, track: Any, paused: bool = False) -> None:
-    caption = _vc_now_playing_card(track, track.requested_by, download_mode=getattr(track, "is_local", False))
-    keyboard = _vc_player_keyboard(paused)
-    try:
-        if query.message and query.message.photo:
-            await query.edit_message_caption(caption=caption, reply_markup=keyboard)
-        else:
-            await query.edit_message_text(text=caption, reply_markup=keyboard)
-    except Exception:
-        pass
+    await MUSIC_HANDLERS.update_vc_player_callback_message(query, track, paused)
 
 
 def _pkg_version(name: str) -> str:
@@ -4766,132 +4736,60 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         chat_id = update.effective_chat.id
 
         assistant_id, assistant_username = await vc.get_assistant_identity()
-        now_ts = time.time()
-        cache_hit = (
-            chat_id in VC_ASSISTANT_PRESENT_CACHE
-            and (now_ts - VC_ASSISTANT_PRESENT_CACHE[chat_id]) < 86400
-        )
-        # If we recently confirmed assistant in this group, trust cache and skip re-check/re-invite.
-        assistant_present = cache_hit
-        if not assistant_present and assistant_id:
-            assistant_present = await _is_assistant_in_chat_by_bot(context, chat_id, assistant_id)
-        if not assistant_present:
-            assistant_present = await vc.is_assistant_in_chat(chat_id)
-
-        # Auto-join assistant only if truly missing.
-        if not assistant_present:
-            if not assistant_id:
-                await status_msg.edit_text(
-                    "\U0001F6A7 Assistant identity not available from session.\n"
-                    "Please regenerate ASSISTANT_SESSION and redeploy."
-                )
-                return
-            if assistant_id:
-                # If assistant was banned in group, try to unban automatically.
-                try:
-                    await context.bot.unban_chat_member(chat_id=chat_id, user_id=assistant_id)
-                except Exception:
-                    pass
-
-            try:
-                invite = await context.bot.create_chat_invite_link(
-                    chat_id=chat_id,
-                    name="VC Assistant Auto Join",
-                    member_limit=1,
-                    creates_join_request=False,
-                )
-                await vc.join_chat_via_invite(invite.invite_link)
-                await asyncio.sleep(1.5)
-            except Exception as auto_join_error:
-                err_txt = str(auto_join_error).lower()
-                if "not enough rights" in err_txt or "administrator" in err_txt or "invite" in err_txt:
-                    await _send_log_to_channel(
-                        context,
-                        (
-                            "VC_AUTOJOIN_ERROR\n"
-                            f"Chat ID: {chat_id}\n"
-                            f"By: {update.effective_user.id}\n"
-                            f"Query: {query}\n"
-                            f"Error: {auto_join_error}"
-                        ),
-                    )
-                    await status_msg.edit_text(
-                        "\U0001F6A7 VC setup needs one admin permission.\n\n"
-                        "Please enable Invite Users via Link for the bot admin role, then run /vplay again.\n\n"
-                        "Also ensure assistant is not banned in this group."
-                    )
-                    return
-                await _send_log_to_channel(
-                    context,
-                    (
-                        "VC_AUTOJOIN_ERROR\n"
-                        f"Chat ID: {chat_id}\n"
-                        f"By: {update.effective_user.id}\n"
-                        f"Query: {query}\n"
-                        f"Error: {auto_join_error}"
-                    ),
-                )
-                await status_msg.edit_text(
-                    "\U0001F6A7 VC setup incomplete: I could not auto-add the assistant account.\n\n"
-                    "Required:\n"
-                    "1. Bot must be admin with invite permission.\n"
-                    "2. Assistant account must be allowed in the group.\n"
-                    "3. If assistant is banned, unban and try again.\n"
-                    "4. Then run /vplay again.\n\n"
-                    f"Details: {auto_join_error}"
-                )
-                return
-
-            assistant_present = await _is_assistant_in_chat_by_bot(context, chat_id, assistant_id)
-            if not assistant_present:
-                assistant_present = await vc.is_assistant_in_chat(chat_id)
-            if not assistant_present:
-                assistant_line = (
-                    f"Assistant: @{assistant_username}"
-                    if assistant_username
-                    else "Assistant account is available in configured session."
-                )
-                await status_msg.edit_text(
-                    "\U0001F6A7 Assistant is still not in this group.\n"
-                    "Please add assistant manually once, then use /vplay again.\n"
-                    f"{assistant_line}"
-                )
-                return
-
-        VC_ASSISTANT_PRESENT_CACHE[chat_id] = now_ts
-
         requested_by = update.effective_user.first_name or "User"
+
+        async def _recover_assistant_membership() -> None:
+            if not assistant_id:
+                raise RuntimeError(
+                    "Assistant identity not available from session. "
+                    "Regenerate ASSISTANT_SESSION and redeploy."
+                )
+            # If assistant is blocked/banned, unban first.
+            try:
+                await context.bot.unban_chat_member(chat_id=chat_id, user_id=assistant_id)
+            except Exception:
+                pass
+            invite = await context.bot.create_chat_invite_link(
+                chat_id=chat_id,
+                name="VC Assistant Auto Join",
+                member_limit=1,
+                creates_join_request=False,
+            )
+            await vc.join_chat_via_invite(invite.invite_link)
+            await asyncio.sleep(1.5)
+
         try:
+            # Direct play first: if assistant is already in group, this avoids any unnecessary re-add flow.
             mode, track = await vc.enqueue_or_play(chat_id, query, requested_by)
         except Exception as play_exc:
             play_err = str(play_exc).lower()
-            if "peer id invalid" in play_err:
-                # Assistant peer cache/session mismatch: force one recovery cycle.
-                VC_ASSISTANT_PRESENT_CACHE.pop(chat_id, None)
+            recoverable_markers = (
+                "peer id invalid",
+                "user not participant",
+                "participant_id_invalid",
+                "chat_admin_required",
+                "not in the chat",
+            )
+            if any(marker in play_err for marker in recoverable_markers):
                 try:
-                    if assistant_id:
-                        try:
-                            await context.bot.unban_chat_member(chat_id=chat_id, user_id=assistant_id)
-                        except Exception:
-                            pass
-                    invite = await context.bot.create_chat_invite_link(
-                        chat_id=chat_id,
-                        name="VC Assistant Peer Repair",
-                        member_limit=1,
-                        creates_join_request=False,
-                    )
-                    await vc.join_chat_via_invite(invite.invite_link)
-                    await asyncio.sleep(1.5)
+                    VC_ASSISTANT_PRESENT_CACHE.pop(chat_id, None)
+                    await _recover_assistant_membership()
                     mode, track = await vc.enqueue_or_play(chat_id, query, requested_by)
-                    VC_ASSISTANT_PRESENT_CACHE[chat_id] = time.time()
                 except Exception as retry_exc:
+                    retry_text = str(retry_exc).lower()
+                    if "not enough rights" in retry_text or "administrator" in retry_text or "invite" in retry_text:
+                        raise RuntimeError(
+                            "Bot needs invite permission to add assistant. "
+                            "Make bot admin with Invite Users via Link, or add assistant manually."
+                        ) from retry_exc
                     raise RuntimeError(
-                        "Assistant cannot access this group peer yet. "
-                        "Please add assistant once manually and try /vplay again. "
-                        f"Details: {retry_exc}"
+                        "Assistant could not join this group automatically. "
+                        f"Please unban/add assistant manually and try again. Details: {retry_exc}"
                     ) from retry_exc
             else:
                 raise
+
+        VC_ASSISTANT_PRESENT_CACHE[chat_id] = time.time()
 
         if mode == "playing":
             await _send_vc_player_card(update, context, status_msg, track, requested_by)
@@ -4990,76 +4888,15 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def vstop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Stop voice chat playback and clear queue."""
-    await _register_user_from_update(update)
-
-    if update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
-        await update.effective_message.reply_text("/vstop works in groups only.")
-        return
-
-    try:
-        vc = await _get_vc_manager()
-        await vc.stop_chat(update.effective_chat.id)
-        await update.effective_message.reply_text("Voice chat playback stopped and queue cleared.")
-    except Exception as e:
-        await update.effective_message.reply_text(f"VC stop failed: {e}")
+    await MUSIC_HANDLERS.vstop_command(update, _register_user_from_update, _get_vc_manager)
 
 
 async def vskip_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Skip current VC track and play next from queue."""
-    await _register_user_from_update(update)
-
-    if update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
-        await update.effective_message.reply_text("/vskip works in groups only.")
-        return
-
-    try:
-        vc = await _get_vc_manager()
-        next_track = await vc.skip(update.effective_chat.id)
-        if not next_track:
-            await update.effective_message.reply_text("Queue empty. Stopped current playback.")
-            return
-        await update.effective_message.reply_text(
-            "⏭️ **Track Skipped**\n\n" + _vc_now_playing_card(next_track, next_track.requested_by),
-            parse_mode=ParseMode.MARKDOWN,
-        )
-    except Exception as e:
-        await update.effective_message.reply_text(f"VC skip failed: {e}")
+    await MUSIC_HANDLERS.vskip_command(update, _register_user_from_update, _get_vc_manager)
 
 
 async def vqueue_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show voice chat queue."""
-    await _register_user_from_update(update)
-
-    if update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
-        await update.effective_message.reply_text("/vqueue works in groups only.")
-        return
-
-    try:
-        vc = await _get_vc_manager()
-        now_track = vc.get_now_playing(update.effective_chat.id)
-        queue = vc.get_queue(update.effective_chat.id)
-
-        lines = ["🎼 **RESSO STYLE QUEUE**"]
-        if now_track:
-            lines.append(
-                f"\n▶️ **Now:** {now_track.title}\n"
-                f"👤 By: {now_track.requested_by}\n"
-                f"🕒 {_format_vc_duration(now_track.duration)}"
-            )
-        else:
-            lines.append("\n▶️ **Now:** Nothing")
-
-        if not queue:
-            lines.append("\n📭 **Queue:** Empty")
-        else:
-            lines.append("\n📜 **Queue List:**")
-            for i, item in enumerate(queue[:10], 1):
-                lines.append(f"{i}. {item.title} • {_format_vc_duration(item.duration)} • by {item.requested_by}")
-
-        await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
-    except Exception as e:
-        await update.effective_message.reply_text(f"VC queue failed: {e}")
+    await MUSIC_HANDLERS.vqueue_command(update, _register_user_from_update, _get_vc_manager)
 
 # ========================= GROUP SETTINGS COMMANDS ========================= #
 
@@ -5070,7 +4907,7 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Must be in a group
     if update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
         await update.effective_message.reply_text(
-            "âŒ Ye command sirf groups mein kaam karta hai! ðŸ˜Š"
+            " Ye command sirf groups mein kaam karta hai! "
         )
         return
     
@@ -5083,7 +4920,7 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         
         if user_member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
             await update.effective_message.reply_text(
-                "âŒ Sirf admins hi group settings change kar sakte hain! ðŸ˜Š"
+                " Sirf admins hi group settings change kar sakte hain! "
             )
             return
             
@@ -5102,24 +4939,24 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     
     # Create category-based settings menu (like Rose Bot)
     keyboard = [
-        [InlineKeyboardButton("ðŸ—‘ï¸ Message Management", callback_data=f"setting_cat_messages_{group_id}"),
-         InlineKeyboardButton("ðŸ›¡ï¸ Security", callback_data=f"setting_cat_security_{group_id}")],
-        [InlineKeyboardButton("ðŸ“‹ Content Control", callback_data=f"setting_cat_content_{group_id}"),
-         InlineKeyboardButton("ðŸ‘‹ Notifications", callback_data=f"setting_cat_notify_{group_id}")],
-        [InlineKeyboardButton("ðŸ“Š View All", callback_data=f"setting_view_{group_id}"),
-         InlineKeyboardButton("âŒ Close", callback_data="setting_close")]
+        [InlineKeyboardButton(" Message Management", callback_data=f"setting_cat_messages_{group_id}"),
+         InlineKeyboardButton(" Security", callback_data=f"setting_cat_security_{group_id}")],
+        [InlineKeyboardButton(" Content Control", callback_data=f"setting_cat_content_{group_id}"),
+         InlineKeyboardButton(" Notifications", callback_data=f"setting_cat_notify_{group_id}")],
+        [InlineKeyboardButton(" View All", callback_data=f"setting_view_{group_id}"),
+         InlineKeyboardButton(" Close", callback_data="setting_close")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.effective_message.reply_text(
-        "âš™ï¸ *Group Settings - Baby Bot* â¤ï¸\n\n"
-        "Apne group ke settings customize karo! ðŸŽ¨\n\n"
+        " *Group Settings - Baby Bot* \n\n"
+        "Apne group ke settings customize karo! \n\n"
         "*Categories:*\n"
-        "ðŸ—‘ï¸ *Message Management* - Auto-delete messages\n"
-        "ðŸ›¡ï¸ *Security* - Spam & anti-flood protection\n"
-        "ðŸ“‹ *Content Control* - Stickers, GIFs, links, forwards\n"
-        "ðŸ‘‹ *Notifications* - Welcome messages\n\n"
-        "Kisi bhi category pe click karo! ðŸ‘‡",
+        " *Message Management* - Auto-delete messages\n"
+        " *Security* - Spam & anti-flood protection\n"
+        " *Content Control* - Stickers, GIFs, links, forwards\n"
+        " *Notifications* - Welcome messages\n\n"
+        "Kisi bhi category pe click karo! ",
         reply_markup=reply_markup,
         parse_mode=ParseMode.MARKDOWN
     )
@@ -5170,24 +5007,24 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
     # ============ VIEW ALL SETTINGS ============
     if action == "view":
         settings_text = (
-            "ðŸ“‹ *Current Group Settings*\n\n"
-            "*ðŸ—‘ï¸ Message Management:*\n"
-            f"â”œâ”€ Auto Delete: {'âœ… ON' if settings['auto_delete_enabled'] else 'âŒ OFF'} ({settings['auto_delete_count']} msgs)\n"
-            f"â”œâ”€ Max Length: {settings['max_message_length']} chars\n\n"
-            "*ðŸ›¡ï¸ Security:*\n"
-            f"â”œâ”€ Spam Protection: {'âœ… ON' if settings['spam_protection'] else 'âŒ OFF'} ({settings['spam_threshold']} msgs)\n"
-            f"â”œâ”€ Delete Admin Spam: {'âœ… YES' if settings['delete_admin_spam'] else 'âŒ NO'}\n"
-            f"â”œâ”€ Anti-Flood: {'âœ… ON' if settings['antiflood_enabled'] else 'âŒ OFF'}\n\n"
-            "*ðŸ“‹ Content Control:*\n"
-            f"â”œâ”€ Stickers: {'âœ… Allowed' if settings['allow_stickers'] else 'âŒ Not Allowed'}\n"
-            f"â”œâ”€ GIFs: {'âœ… Allowed' if settings['allow_gifs'] else 'âŒ Not Allowed'}\n"
-            f"â”œâ”€ Links: {'âœ… Allowed' if settings['allow_links'] else 'âŒ Not Allowed'}\n"
-            f"â”œâ”€ Forwards: {'âœ… Allowed' if settings['allow_forwards'] else 'âŒ Not Allowed'}\n"
-            f"â”œâ”€ Bot Links: {'ðŸ§¹ Auto Delete' if settings['remove_bot_links'] else 'âœ… Allowed'}\n\n"
-            "*ðŸ‘‹ Notifications:*\n"
-            f"â””â”€ Welcome: {'âœ… ON' if settings['welcome_message'] else 'âŒ OFF'}"
+            " *Current Group Settings*\n\n"
+            "* Message Management:*\n"
+            f" Auto Delete: {' ON' if settings['auto_delete_enabled'] else ' OFF'} ({settings['auto_delete_count']} msgs)\n"
+            f" Max Length: {settings['max_message_length']} chars\n\n"
+            "* Security:*\n"
+            f" Spam Protection: {' ON' if settings['spam_protection'] else ' OFF'} ({settings['spam_threshold']} msgs)\n"
+            f" Delete Admin Spam: {' YES' if settings['delete_admin_spam'] else ' NO'}\n"
+            f" Anti-Flood: {' ON' if settings['antiflood_enabled'] else ' OFF'}\n\n"
+            "* Content Control:*\n"
+            f" Stickers: {' Allowed' if settings['allow_stickers'] else ' Not Allowed'}\n"
+            f" GIFs: {' Allowed' if settings['allow_gifs'] else ' Not Allowed'}\n"
+            f" Links: {' Allowed' if settings['allow_links'] else ' Not Allowed'}\n"
+            f" Forwards: {' Allowed' if settings['allow_forwards'] else ' Not Allowed'}\n"
+            f" Bot Links: {' Auto Delete' if settings['remove_bot_links'] else ' Allowed'}\n\n"
+            "* Notifications:*\n"
+            f" Welcome: {' ON' if settings['welcome_message'] else ' OFF'}"
         )
-        keyboard = [[InlineKeyboardButton("ðŸ”™ Back to Menu", callback_data=f"setting_menu_{group_id}")]]
+        keyboard = [[InlineKeyboardButton(" Back to Menu", callback_data=f"setting_menu_{group_id}")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(settings_text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
         await query.answer()
@@ -5196,23 +5033,23 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
     # ============ MAIN MENU ============
     if action == "menu":
         keyboard = [
-            [InlineKeyboardButton("ðŸ—‘ï¸ Message Management", callback_data=f"setting_cat_messages_{group_id}"),
-             InlineKeyboardButton("ðŸ›¡ï¸ Security", callback_data=f"setting_cat_security_{group_id}")],
-            [InlineKeyboardButton("ðŸ“‹ Content Control", callback_data=f"setting_cat_content_{group_id}"),
-             InlineKeyboardButton("ðŸ‘‹ Notifications", callback_data=f"setting_cat_notify_{group_id}")],
-            [InlineKeyboardButton("ðŸ“Š View All", callback_data=f"setting_view_{group_id}"),
-             InlineKeyboardButton("âŒ Close", callback_data="setting_close")]
+            [InlineKeyboardButton(" Message Management", callback_data=f"setting_cat_messages_{group_id}"),
+             InlineKeyboardButton(" Security", callback_data=f"setting_cat_security_{group_id}")],
+            [InlineKeyboardButton(" Content Control", callback_data=f"setting_cat_content_{group_id}"),
+             InlineKeyboardButton(" Notifications", callback_data=f"setting_cat_notify_{group_id}")],
+            [InlineKeyboardButton(" View All", callback_data=f"setting_view_{group_id}"),
+             InlineKeyboardButton(" Close", callback_data="setting_close")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(
-            "âš™ï¸ *Group Settings - Baby Bot* â¤ï¸\n\n"
-            "Apne group ke settings customize karo! ðŸŽ¨\n\n"
+            " *Group Settings - Baby Bot* \n\n"
+            "Apne group ke settings customize karo! \n\n"
             "*Categories:*\n"
-            "ðŸ—‘ï¸ *Message Management* - Auto-delete messages\n"
-            "ðŸ›¡ï¸ *Security* - Spam & anti-flood protection\n"
-            "ðŸ“‹ *Content Control* - Stickers, GIFs, links, forwards\n"
-            "ðŸ‘‹ *Notifications* - Welcome messages\n\n"
-            "Kisi bhi category pe click karo! ðŸ‘‡",
+            " *Message Management* - Auto-delete messages\n"
+            " *Security* - Spam & anti-flood protection\n"
+            " *Content Control* - Stickers, GIFs, links, forwards\n"
+            " *Notifications* - Welcome messages\n\n"
+            "Kisi bhi category pe click karo! ",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=reply_markup
         )
@@ -5222,16 +5059,16 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
     # ============ CATEGORY: MESSAGE MANAGEMENT ============
     if action == "cat" and len(parts) >= 4 and parts[3] == "messages":
         keyboard = [
-            [InlineKeyboardButton(f"ðŸ—‘ï¸ Auto Delete: {'âœ…' if settings['auto_delete_enabled'] else 'âŒ'}", 
+            [InlineKeyboardButton(f" Auto Delete: {'ON' if settings['auto_delete_enabled'] else 'OFF'}", 
                                 callback_data=f"setting_autodel_{group_id}")],
-            [InlineKeyboardButton(f"âœï¸ Message Count: {settings['auto_delete_count']}", 
+            [InlineKeyboardButton(f" Message Count: {settings['auto_delete_count']}", 
                                 callback_data=f"setting_editautocount_{group_id}")],
-            [InlineKeyboardButton("ðŸ”™ Back to Menu", callback_data=f"setting_menu_{group_id}")]
+            [InlineKeyboardButton(" Back to Menu", callback_data=f"setting_menu_{group_id}")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(
-            "ðŸ—‘ï¸ *Message Management*\n\n"
-            f"Auto Delete: {'âœ… ENABLED' if settings['auto_delete_enabled'] else 'âŒ DISABLED'}\n"
+            " *Message Management*\n\n"
+            f"Auto Delete: {' ENABLED' if settings['auto_delete_enabled'] else ' DISABLED'}\n"
             f"Delete after {settings['auto_delete_count']} messages\n\n"
             "Click buttons to customize:",
             parse_mode=ParseMode.MARKDOWN,
@@ -5243,23 +5080,23 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
     # ============ CATEGORY: SECURITY ============
     if action == "cat" and len(parts) >= 4 and parts[3] == "security":
         keyboard = [
-            [InlineKeyboardButton(f"ðŸ›¡ï¸ Spam: {'âœ…' if settings['spam_protection'] else 'âŒ'}", 
+            [InlineKeyboardButton(f" Spam: {'ON' if settings['spam_protection'] else 'OFF'}", 
                                 callback_data=f"setting_spam_{group_id}"),
-             InlineKeyboardButton(f"ðŸš« Flood: {'âœ…' if settings['antiflood_enabled'] else 'âŒ'}", 
+             InlineKeyboardButton(f" Flood: {'ON' if settings['antiflood_enabled'] else 'OFF'}", 
                                 callback_data=f"setting_antiflood_{group_id}")],
-            [InlineKeyboardButton(f"âœï¸ Threshold: {settings['spam_threshold']}", 
+            [InlineKeyboardButton(f" Threshold: {settings['spam_threshold']}", 
                                 callback_data=f"setting_editspamcount_{group_id}")],
-            [InlineKeyboardButton(f"Admin Spam: {'âœ…' if settings['delete_admin_spam'] else 'âŒ'}", 
+            [InlineKeyboardButton(f"Admin Spam: {'YES' if settings['delete_admin_spam'] else 'NO'}", 
                                 callback_data=f"setting_adminspam_{group_id}")],
-            [InlineKeyboardButton("ðŸ”™ Back to Menu", callback_data=f"setting_menu_{group_id}")]
+            [InlineKeyboardButton(" Back to Menu", callback_data=f"setting_menu_{group_id}")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(
-            "ðŸ›¡ï¸ *Security Settings*\n\n"
-            f"Spam Protection: {'âœ… ON' if settings['spam_protection'] else 'âŒ OFF'}\n"
-            f"Anti-Flood: {'âœ… ON' if settings['antiflood_enabled'] else 'âŒ OFF'}\n"
+            " *Security Settings*\n\n"
+            f"Spam Protection: {' ON' if settings['spam_protection'] else ' OFF'}\n"
+            f"Anti-Flood: {' ON' if settings['antiflood_enabled'] else ' OFF'}\n"
             f"Threshold: {settings['spam_threshold']} msgs/10s\n"
-            f"Delete Admin Spam: {'âœ… YES' if settings['delete_admin_spam'] else 'âŒ NO'}\n\n"
+            f"Delete Admin Spam: {' YES' if settings['delete_admin_spam'] else ' NO'}\n\n"
             "Click to toggle:",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=reply_markup
@@ -5270,26 +5107,26 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
     # ============ CATEGORY: CONTENT CONTROL ============
     if action == "cat" and len(parts) >= 4 and parts[3] == "content":
         keyboard = [
-            [InlineKeyboardButton(f"ðŸŽ­ Stickers: {'âœ…' if settings['allow_stickers'] else 'âŒ'}", 
+            [InlineKeyboardButton(f" Stickers: {'ON' if settings['allow_stickers'] else 'OFF'}", 
                                 callback_data=f"setting_stickers_{group_id}"),
-             InlineKeyboardButton(f"ðŸŽ¬ GIFs: {'âœ…' if settings['allow_gifs'] else 'âŒ'}", 
+             InlineKeyboardButton(f" GIFs: {'ON' if settings['allow_gifs'] else 'OFF'}", 
                                 callback_data=f"setting_gifs_{group_id}")],
-            [InlineKeyboardButton(f"ðŸ”— Links: {'âœ…' if settings['allow_links'] else 'âŒ'}", 
+            [InlineKeyboardButton(f" Links: {'ON' if settings['allow_links'] else 'OFF'}", 
                                 callback_data=f"setting_links_{group_id}"),
-             InlineKeyboardButton(f"â†ªï¸ Forwards: {'âœ…' if settings['allow_forwards'] else 'âŒ'}", 
+             InlineKeyboardButton(f" Forwards: {'ON' if settings['allow_forwards'] else 'OFF'}", 
                                 callback_data=f"setting_forwards_{group_id}")],
-            [InlineKeyboardButton(f"ðŸ¤– Bot Links: {'ðŸ§¹' if settings['remove_bot_links'] else 'âœ…'}",
+            [InlineKeyboardButton(f" Bot Links: {'DEL' if settings['remove_bot_links'] else 'ALLOW'}",
                                 callback_data=f"setting_botlinks_{group_id}")],
-            [InlineKeyboardButton("ðŸ”™ Back to Menu", callback_data=f"setting_menu_{group_id}")]
+            [InlineKeyboardButton(" Back to Menu", callback_data=f"setting_menu_{group_id}")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(
-            "ðŸ“‹ *Content Control Settings*\n\n"
-            f"Stickers: {'âœ… Allowed' if settings['allow_stickers'] else 'âŒ Not Allowed'}\n"
-            f"GIFs: {'âœ… Allowed' if settings['allow_gifs'] else 'âŒ Not Allowed'}\n"
-            f"Links: {'âœ… Allowed' if settings['allow_links'] else 'âŒ Not Allowed'}\n"
-            f"Forwards: {'âœ… Allowed' if settings['allow_forwards'] else 'âŒ Not Allowed'}\n"
-            f"Bot Links: {'ðŸ§¹ Auto Delete' if settings['remove_bot_links'] else 'âœ… Allowed'}\n\n"
+            " *Content Control Settings*\n\n"
+            f"Stickers: {' Allowed' if settings['allow_stickers'] else ' Not Allowed'}\n"
+            f"GIFs: {' Allowed' if settings['allow_gifs'] else ' Not Allowed'}\n"
+            f"Links: {' Allowed' if settings['allow_links'] else ' Not Allowed'}\n"
+            f"Forwards: {' Allowed' if settings['allow_forwards'] else ' Not Allowed'}\n"
+            f"Bot Links: {' Auto Delete' if settings['remove_bot_links'] else ' Allowed'}\n\n"
             "Click to toggle:",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=reply_markup
@@ -5300,14 +5137,14 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
     # ============ CATEGORY: NOTIFICATIONS ============
     if action == "cat" and len(parts) >= 4 and parts[3] == "notify":
         keyboard = [
-            [InlineKeyboardButton(f"ðŸ‘‹ Welcome: {'âœ…' if settings['welcome_message'] else 'âŒ'}", 
+            [InlineKeyboardButton(f" Welcome: {'ON' if settings['welcome_message'] else 'OFF'}", 
                                 callback_data=f"setting_welcome_{group_id}")],
-            [InlineKeyboardButton("ðŸ”™ Back to Menu", callback_data=f"setting_menu_{group_id}")]
+            [InlineKeyboardButton(" Back to Menu", callback_data=f"setting_menu_{group_id}")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(
-            "ðŸ‘‹ *Notification Settings*\n\n"
-            f"Welcome Message: {'âœ… ON' if settings['welcome_message'] else 'âŒ OFF'}\n\n"
+            " *Notification Settings*\n\n"
+            f"Welcome Message: {' ON' if settings['welcome_message'] else ' OFF'}\n\n"
             "Click to toggle:",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=reply_markup
@@ -5319,15 +5156,15 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
     if action == "autodel":
         settings['auto_delete_enabled'] = not settings['auto_delete_enabled']
         update_group_setting(group_id, 'auto_delete_enabled', settings['auto_delete_enabled'])
-        await query.answer(f"âœ… Auto-delete {'enabled' if settings['auto_delete_enabled'] else 'disabled'}!")
+        await query.answer(f" Auto-delete {'enabled' if settings['auto_delete_enabled'] else 'disabled'}!")
         
         # Refresh category view
         keyboard = [
-            [InlineKeyboardButton(f"ðŸ—‘ï¸ Auto Delete: {'âœ…' if settings['auto_delete_enabled'] else 'âŒ'}", 
+            [InlineKeyboardButton(f" Auto Delete: {'ON' if settings['auto_delete_enabled'] else 'OFF'}", 
                                 callback_data=f"setting_autodel_{group_id}")],
-            [InlineKeyboardButton(f"âœï¸ Message Count: {settings['auto_delete_count']}", 
+            [InlineKeyboardButton(f" Message Count: {settings['auto_delete_count']}", 
                                 callback_data=f"setting_editautocount_{group_id}")],
-            [InlineKeyboardButton("ðŸ”™ Back to Menu", callback_data=f"setting_menu_{group_id}")]
+            [InlineKeyboardButton(" Back to Menu", callback_data=f"setting_menu_{group_id}")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_reply_markup(reply_markup=reply_markup)
@@ -5336,18 +5173,18 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
     if action == "spam":
         settings['spam_protection'] = not settings['spam_protection']
         update_group_setting(group_id, 'spam_protection', settings['spam_protection'])
-        await query.answer(f"âœ… Spam protection {'enabled' if settings['spam_protection'] else 'disabled'}!")
+        await query.answer(f" Spam protection {'enabled' if settings['spam_protection'] else 'disabled'}!")
         
         keyboard = [
-            [InlineKeyboardButton(f"ðŸ›¡ï¸ Spam: {'âœ…' if settings['spam_protection'] else 'âŒ'}", 
+            [InlineKeyboardButton(f" Spam: {'ON' if settings['spam_protection'] else 'OFF'}", 
                                 callback_data=f"setting_spam_{group_id}"),
-             InlineKeyboardButton(f"ðŸš« Flood: {'âœ…' if settings['antiflood_enabled'] else 'âŒ'}", 
+             InlineKeyboardButton(f" Flood: {'ON' if settings['antiflood_enabled'] else 'OFF'}", 
                                 callback_data=f"setting_antiflood_{group_id}")],
-            [InlineKeyboardButton(f"âœï¸ Threshold: {settings['spam_threshold']}", 
+            [InlineKeyboardButton(f" Threshold: {settings['spam_threshold']}", 
                                 callback_data=f"setting_editspamcount_{group_id}")],
-            [InlineKeyboardButton(f"Admin Spam: {'âœ…' if settings['delete_admin_spam'] else 'âŒ'}", 
+            [InlineKeyboardButton(f"Admin Spam: {'YES' if settings['delete_admin_spam'] else 'NO'}", 
                                 callback_data=f"setting_adminspam_{group_id}")],
-            [InlineKeyboardButton("ðŸ”™ Back to Menu", callback_data=f"setting_menu_{group_id}")]
+            [InlineKeyboardButton(" Back to Menu", callback_data=f"setting_menu_{group_id}")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_reply_markup(reply_markup=reply_markup)
@@ -5356,18 +5193,18 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
     if action == "antiflood":
         settings['antiflood_enabled'] = not settings['antiflood_enabled']
         update_group_setting(group_id, 'antiflood_enabled', settings['antiflood_enabled'])
-        await query.answer(f"âœ… Anti-flood {'enabled' if settings['antiflood_enabled'] else 'disabled'}!")
+        await query.answer(f" Anti-flood {'enabled' if settings['antiflood_enabled'] else 'disabled'}!")
         
         keyboard = [
-            [InlineKeyboardButton(f"ðŸ›¡ï¸ Spam: {'âœ…' if settings['spam_protection'] else 'âŒ'}", 
+            [InlineKeyboardButton(f" Spam: {'ON' if settings['spam_protection'] else 'OFF'}", 
                                 callback_data=f"setting_spam_{group_id}"),
-             InlineKeyboardButton(f"ðŸš« Flood: {'âœ…' if settings['antiflood_enabled'] else 'âŒ'}", 
+             InlineKeyboardButton(f" Flood: {'ON' if settings['antiflood_enabled'] else 'OFF'}", 
                                 callback_data=f"setting_antiflood_{group_id}")],
-            [InlineKeyboardButton(f"âœï¸ Threshold: {settings['spam_threshold']}", 
+            [InlineKeyboardButton(f" Threshold: {settings['spam_threshold']}", 
                                 callback_data=f"setting_editspamcount_{group_id}")],
-            [InlineKeyboardButton(f"Admin Spam: {'âœ…' if settings['delete_admin_spam'] else 'âŒ'}", 
+            [InlineKeyboardButton(f"Admin Spam: {'YES' if settings['delete_admin_spam'] else 'NO'}", 
                                 callback_data=f"setting_adminspam_{group_id}")],
-            [InlineKeyboardButton("ðŸ”™ Back to Menu", callback_data=f"setting_menu_{group_id}")]
+            [InlineKeyboardButton(" Back to Menu", callback_data=f"setting_menu_{group_id}")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_reply_markup(reply_markup=reply_markup)
@@ -5376,18 +5213,18 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
     if action == "adminspam":
         settings['delete_admin_spam'] = not settings['delete_admin_spam']
         update_group_setting(group_id, 'delete_admin_spam', settings['delete_admin_spam'])
-        await query.answer(f"âœ… Admin spam deletion {'enabled' if settings['delete_admin_spam'] else 'disabled'}!")
+        await query.answer(f" Admin spam deletion {'enabled' if settings['delete_admin_spam'] else 'disabled'}!")
         
         keyboard = [
-            [InlineKeyboardButton(f"ðŸ›¡ï¸ Spam: {'âœ…' if settings['spam_protection'] else 'âŒ'}", 
+            [InlineKeyboardButton(f" Spam: {'ON' if settings['spam_protection'] else 'OFF'}", 
                                 callback_data=f"setting_spam_{group_id}"),
-             InlineKeyboardButton(f"ðŸš« Flood: {'âœ…' if settings['antiflood_enabled'] else 'âŒ'}", 
+             InlineKeyboardButton(f" Flood: {'ON' if settings['antiflood_enabled'] else 'OFF'}", 
                                 callback_data=f"setting_antiflood_{group_id}")],
-            [InlineKeyboardButton(f"âœï¸ Threshold: {settings['spam_threshold']}", 
+            [InlineKeyboardButton(f" Threshold: {settings['spam_threshold']}", 
                                 callback_data=f"setting_editspamcount_{group_id}")],
-            [InlineKeyboardButton(f"Admin Spam: {'âœ…' if settings['delete_admin_spam'] else 'âŒ'}", 
+            [InlineKeyboardButton(f"Admin Spam: {'YES' if settings['delete_admin_spam'] else 'NO'}", 
                                 callback_data=f"setting_adminspam_{group_id}")],
-            [InlineKeyboardButton("ðŸ”™ Back to Menu", callback_data=f"setting_menu_{group_id}")]
+            [InlineKeyboardButton(" Back to Menu", callback_data=f"setting_menu_{group_id}")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_reply_markup(reply_markup=reply_markup)
@@ -5418,28 +5255,28 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
         update_group_setting(group_id, setting_key, settings[setting_key])
         
         status = "enabled" if settings[setting_key] else "disabled"
-        await query.answer(f"âœ… {name_map[action]} {status}!")
+        await query.answer(f" {name_map[action]} {status}!")
         
         # Determine which category to refresh
         if action in ["stickers", "gifs", "links", "forwards", "botlinks"]:
             keyboard = [
-                [InlineKeyboardButton(f"ðŸŽ­ Stickers: {'âœ…' if settings['allow_stickers'] else 'âŒ'}", 
+                [InlineKeyboardButton(f" Stickers: {'ON' if settings['allow_stickers'] else 'OFF'}", 
                                     callback_data=f"setting_stickers_{group_id}"),
-                 InlineKeyboardButton(f"ðŸŽ¬ GIFs: {'âœ…' if settings['allow_gifs'] else 'âŒ'}", 
+                 InlineKeyboardButton(f" GIFs: {'ON' if settings['allow_gifs'] else 'OFF'}", 
                                     callback_data=f"setting_gifs_{group_id}")],
-                [InlineKeyboardButton(f"ðŸ”— Links: {'âœ…' if settings['allow_links'] else 'âŒ'}", 
+                [InlineKeyboardButton(f" Links: {'ON' if settings['allow_links'] else 'OFF'}", 
                                     callback_data=f"setting_links_{group_id}"),
-                 InlineKeyboardButton(f"â†ªï¸ Forwards: {'âœ…' if settings['allow_forwards'] else 'âŒ'}", 
+                 InlineKeyboardButton(f" Forwards: {'ON' if settings['allow_forwards'] else 'OFF'}", 
                                     callback_data=f"setting_forwards_{group_id}")],
-                [InlineKeyboardButton(f"ðŸ¤– Bot Links: {'ðŸ§¹' if settings['remove_bot_links'] else 'âœ…'}",
+                [InlineKeyboardButton(f" Bot Links: {'DEL' if settings['remove_bot_links'] else 'ALLOW'}",
                                     callback_data=f"setting_botlinks_{group_id}")],
-                [InlineKeyboardButton("ðŸ”™ Back to Menu", callback_data=f"setting_menu_{group_id}")]
+                [InlineKeyboardButton(" Back to Menu", callback_data=f"setting_menu_{group_id}")]
             ]
         else:
             keyboard = [
-                [InlineKeyboardButton(f"ðŸ‘‹ Welcome: {'âœ…' if settings['welcome_message'] else 'âŒ'}", 
+                [InlineKeyboardButton(f" Welcome: {'ON' if settings['welcome_message'] else 'OFF'}", 
                                     callback_data=f"setting_welcome_{group_id}")],
-                [InlineKeyboardButton("ðŸ”™ Back to Menu", callback_data=f"setting_menu_{group_id}")]
+                [InlineKeyboardButton(" Back to Menu", callback_data=f"setting_menu_{group_id}")]
             ]
         
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -5455,11 +5292,11 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
              InlineKeyboardButton("500", callback_data=f"setting_setautocount_{group_id}_500")],
             [InlineKeyboardButton("1000", callback_data=f"setting_setautocount_{group_id}_1000"),
              InlineKeyboardButton("2000", callback_data=f"setting_setautocount_{group_id}_2000")],
-            [InlineKeyboardButton("ðŸ”™ Back", callback_data=f"setting_cat_messages_{group_id}")]
+            [InlineKeyboardButton(" Back", callback_data=f"setting_cat_messages_{group_id}")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(
-            f"âœï¸ *Select Message Count*\n\n"
+            f" *Select Message Count*\n\n"
             f"Current: {settings['auto_delete_count']} messages\n\n"
             f"Messages will be deleted after this count:",
             parse_mode=ParseMode.MARKDOWN,
@@ -5472,14 +5309,14 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
         new_count = int(parts[3])
         settings['auto_delete_count'] = new_count
         update_group_setting(group_id, 'auto_delete_count', new_count)
-        await query.answer(f"âœ… Message count set to {new_count}!")
+        await query.answer(f" Message count set to {new_count}!")
         
         keyboard = [
-            [InlineKeyboardButton(f"ðŸ—‘ï¸ Auto Delete: {'âœ…' if settings['auto_delete_enabled'] else 'âŒ'}", 
+            [InlineKeyboardButton(f" Auto Delete: {'ON' if settings['auto_delete_enabled'] else 'OFF'}", 
                                 callback_data=f"setting_autodel_{group_id}")],
-            [InlineKeyboardButton(f"âœï¸ Message Count: {new_count}", 
+            [InlineKeyboardButton(f" Message Count: {new_count}", 
                                 callback_data=f"setting_editautocount_{group_id}")],
-            [InlineKeyboardButton("ðŸ”™ Back to Menu", callback_data=f"setting_menu_{group_id}")]
+            [InlineKeyboardButton(" Back to Menu", callback_data=f"setting_menu_{group_id}")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_reply_markup(reply_markup=reply_markup)
@@ -5493,11 +5330,11 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
              InlineKeyboardButton("10", callback_data=f"setting_setspamcount_{group_id}_10")],
             [InlineKeyboardButton("15", callback_data=f"setting_setspamcount_{group_id}_15"),
              InlineKeyboardButton("20", callback_data=f"setting_setspamcount_{group_id}_20")],
-            [InlineKeyboardButton("ðŸ”™ Back", callback_data=f"setting_cat_security_{group_id}")]
+            [InlineKeyboardButton(" Back", callback_data=f"setting_cat_security_{group_id}")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(
-            f"âœï¸ *Select Spam Threshold*\n\n"
+            f" *Select Spam Threshold*\n\n"
             f"Current: {settings['spam_threshold']} messages\n\n"
             f"Messages in 10 seconds = spam trigger:",
             parse_mode=ParseMode.MARKDOWN,
@@ -5510,18 +5347,18 @@ async def handle_setting_callback(update: Update, context: ContextTypes.DEFAULT_
         new_threshold = int(parts[3])
         settings['spam_threshold'] = new_threshold
         update_group_setting(group_id, 'spam_threshold', new_threshold)
-        await query.answer(f"âœ… Spam threshold set to {new_threshold}!")
+        await query.answer(f" Spam threshold set to {new_threshold}!")
         
         keyboard = [
-            [InlineKeyboardButton(f"ðŸ›¡ï¸ Spam: {'âœ…' if settings['spam_protection'] else 'âŒ'}", 
+            [InlineKeyboardButton(f" Spam: {'ON' if settings['spam_protection'] else 'OFF'}", 
                                 callback_data=f"setting_spam_{group_id}"),
-             InlineKeyboardButton(f"ðŸš« Flood: {'âœ…' if settings['antiflood_enabled'] else 'âŒ'}", 
+             InlineKeyboardButton(f" Flood: {'ON' if settings['antiflood_enabled'] else 'OFF'}", 
                                 callback_data=f"setting_antiflood_{group_id}")],
-            [InlineKeyboardButton(f"âœï¸ Threshold: {new_threshold}", 
+            [InlineKeyboardButton(f" Threshold: {new_threshold}", 
                                 callback_data=f"setting_editspamcount_{group_id}")],
-            [InlineKeyboardButton(f"Admin Spam: {'âœ…' if settings['delete_admin_spam'] else 'âŒ'}", 
+            [InlineKeyboardButton(f"Admin Spam: {'YES' if settings['delete_admin_spam'] else 'NO'}", 
                                 callback_data=f"setting_adminspam_{group_id}")],
-            [InlineKeyboardButton("ðŸ”™ Back to Menu", callback_data=f"setting_menu_{group_id}")]
+            [InlineKeyboardButton(" Back to Menu", callback_data=f"setting_menu_{group_id}")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_reply_markup(reply_markup=reply_markup)
@@ -5532,59 +5369,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     """Handle inline button callbacks"""
     query = update.callback_query
 
-    if query.data.startswith("vcctl_"):
-        chat_id = query.message.chat_id if query.message else None
-        if not chat_id:
-            await query.answer("Chat not found.", show_alert=True)
-            return
-        try:
-            vc = await _get_vc_manager()
-            action = query.data.split("_", 1)[1]
-            if action == "pause_resume":
-                if vc.is_paused(chat_id):
-                    await vc.resume_chat(chat_id)
-                    now_track = vc.get_now_playing(chat_id)
-                    if now_track:
-                        await _update_vc_player_callback_message(query, now_track, paused=False)
-                else:
-                    await vc.pause_chat(chat_id)
-                    now_track = vc.get_now_playing(chat_id)
-                    if now_track:
-                        await _update_vc_player_callback_message(query, now_track, paused=True)
-                return
-
-            if action == "skip":
-                next_track = await vc.skip(chat_id)
-                if not next_track:
-                    try:
-                        if query.message and query.message.photo:
-                            await query.edit_message_caption("⏹ Playback stopped. Queue is empty.")
-                        else:
-                            await query.edit_message_text("⏹ Playback stopped. Queue is empty.")
-                    except Exception:
-                        pass
-                    return
-                await _update_vc_player_callback_message(query, next_track, paused=False)
-                return
-
-            if action == "stop":
-                await vc.stop_chat(chat_id)
-                try:
-                    if query.message and query.message.photo:
-                        await query.edit_message_caption("⏹ Playback stopped and queue cleared.")
-                    else:
-                        await query.edit_message_text("⏹ Playback stopped and queue cleared.")
-                except Exception:
-                    pass
-                return
-
-            if action == "queue":
-                queue = vc.get_queue(chat_id)
-                await query.answer(_vc_queue_preview(queue), show_alert=True)
-                return
-        except Exception as e:
-            await query.answer(f"VC control failed: {e}", show_alert=True)
-            return
+    if await MUSIC_HANDLERS.handle_vc_callback(query, _get_vc_manager):
+        return
 
     if query.data.startswith("setting_"):
         await handle_setting_callback(update, context)
@@ -5841,7 +5627,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         # Check for spam FIRST (before any processing)
         spam_handled = await _check_spam(update, context)
         if spam_handled:
-            logger.info(f"ðŸš« Spam detected and handled from {user_name}")
+            logger.info(f" Spam detected and handled from {user_name}")
             return  # Spam detected and handled, don't process further
         
         # Bot link auto-delete (configurable in /settings)
@@ -5897,9 +5683,9 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         if message_text_lower.startswith("play ") and len(message_text_lower) > 5:
             song_name = message_text[5:].strip()  # Extract song name after "play "
             if song_name:
-                # Simulate /song command by setting context.args and calling song_command
+                # In groups, route plain "play <song>" to VC flow for queue/continuous playback.
                 context.args = song_name.split()
-                await song_command(update, context)
+                await vplay_command(update, context)
                 return
         
         # Track active user
@@ -5920,18 +5706,18 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             if update.message.reply_to_message.from_user:
                 if update.message.reply_to_message.from_user.is_bot:
                     should_respond = True
-                    logger.info("âœ… Trigger: Reply to bot")
+                    logger.info(" Trigger: Reply to bot")
         
         # Trigger 2: Bot mentioned (@AnimxClanBot or @animxclanbot)
         if "@animxclanbot" in message_text_lower or BOT_USERNAME.lower() in message_text_lower:
             should_respond = True
             bot_mentioned = True
-            logger.info("âœ… Trigger: Bot mentioned")
+            logger.info(" Trigger: Bot mentioned")
         
         # Trigger 3: Contains "baby"
         if "baby" in message_text_lower:
             should_respond = True
-            logger.info("âœ… Trigger: Word 'baby'")
+            logger.info(" Trigger: Word 'baby'")
         
         # Trigger 4: Basic greetings
         # These are exact word matches (case-insensitive)
@@ -5947,21 +5733,21 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 if " " in greeting:
                     if greeting in message_text_lower:
                         should_respond = True
-                        logger.info(f"âœ… Trigger: Greeting '{greeting}'")
+                        logger.info(f" Trigger: Greeting '{greeting}'")
                         break
                 # For single-word greetings
                 else:
                     if greeting in words:
                         should_respond = True
-                        logger.info(f"âœ… Trigger: Greeting '{greeting}'")
+                        logger.info(f" Trigger: Greeting '{greeting}'")
                         break
         
         # If NO trigger, IGNORE silently
         if not should_respond:
-            logger.debug(f"â­ï¸ No trigger - ignoring message from {user_name}: {message_text[:30]}")
+            logger.debug(f" No trigger - ignoring message from {user_name}: {message_text[:30]}")
             return
         
-        logger.info(f"ðŸŽ¯ RESPONDING to {user_name} in [{chat_title}]: {message_text[:50]}")
+        logger.info(f" RESPONDING to {user_name} in [{chat_title}]: {message_text[:50]}")
         
         # Detect language preference from message
         if "english me bolo" in message_text_lower or "speak in english" in message_text_lower:
@@ -6028,7 +5814,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             BOT_DB.add_chat_memory(user_id, group_id, "user", message_text)
             BOT_DB.add_chat_memory(user_id, group_id, "assistant", ai_response)
-            logger.info(f"âœ… Sent response to group: {ai_response[:40]}...")
+            logger.info(f" Sent response to group: {ai_response[:40]}...")
         except Exception as e:
             logger.error(f"Failed to send group message reply: {e}")
     
@@ -6441,17 +6227,17 @@ def _default_bot_commands() -> list[BotCommand]:
 
 async def post_init(app: Application) -> None:
     """Run after bot initialization"""
-    logger.info("ðŸš€ Bot initializing...")
+    logger.info(" Bot initializing...")
     
     try:
         await app.bot.delete_webhook(drop_pending_updates=True)
-        logger.info("âœ… Webhook deleted")
+        logger.info(" Webhook deleted")
     except Exception as e:
-        logger.warning(f"âš ï¸ Could not delete webhook: {e}")
+        logger.warning(f" Could not delete webhook: {e}")
     
     bot_info = await app.bot.get_me()
-    logger.info(f"âœ… Bot started: @{bot_info.username}")
-    logger.info("ðŸ’¬ Ready to chat!")
+    logger.info(f" Bot started: @{bot_info.username}")
+    logger.info(" Ready to chat!")
     try:
         await app.bot.set_my_commands(_default_bot_commands())
         logger.info("Bot commands synced automatically")
@@ -6476,22 +6262,22 @@ def main() -> None:
     
     # Log AI service configuration
     logger.info("=" * 50)
-    logger.info("ðŸ¤– ANIMX CLAN Bot Starting...")
+    logger.info(" ANIMX CLAN Bot Starting...")
     logger.info("=" * 50)
     if OPENROUTER_API_KEY:
-        logger.info(f"âœ… OpenRouter: Enabled (Model: {OPENROUTER_MODEL})")
+        logger.info(f" OpenRouter: Enabled (Model: {OPENROUTER_MODEL})")
     else:
-        logger.info("âŒ OpenRouter: Disabled")
+        logger.info(" OpenRouter: Disabled")
 
     if OPENAI_API_KEY:
-        logger.info(f"âœ… OpenAI: Enabled (Model: {OPENAI_MODEL})")
+        logger.info(f" OpenAI: Enabled (Model: {OPENAI_MODEL})")
     else:
-        logger.info("âŒ OpenAI: Disabled")
+        logger.info(" OpenAI: Disabled")
     
     if GEMINI_API_KEY and GEMINI_CLIENT:
-        logger.info("âœ… Gemini: Enabled (Fallback)")
+        logger.info(" Gemini: Enabled (Fallback)")
     else:
-        logger.info("âŒ Gemini: Disabled")
+        logger.info(" Gemini: Disabled")
     logger.info("=" * 50)
     
     # Build application with extended timeouts
@@ -6712,7 +6498,7 @@ def main() -> None:
     application.add_error_handler(error_handler)
     
     # Start the bot
-    logger.info(f"ðŸŽ‰ {BOT_NAME} is starting...")
+    logger.info(f" {BOT_NAME} is starting...")
     
     application.run_polling(
         allowed_updates=Update.ALL_TYPES,
@@ -6723,3 +6509,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+

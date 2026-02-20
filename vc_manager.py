@@ -1,11 +1,14 @@
 import asyncio
 import importlib
+import logging
 import os
 import re
 import tempfile
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Optional
+
+logger = logging.getLogger("ANIMX_VC")
 
 
 @dataclass
@@ -44,6 +47,7 @@ class VCManager:
         self._play_tokens: dict[int, int] = {}
         self._paused_chats: set[int] = set()
         self._default_track_seconds = int(os.getenv("VC_DEFAULT_TRACK_SECONDS", "240"))
+        self._stream_end_handler_registered = False
 
     async def start(self) -> None:
         if self._ready:
@@ -123,6 +127,7 @@ class VCManager:
                 self._audio_piped_cls = audio_piped_cls
 
             self._yt_dlp = yt_dlp
+            self._register_stream_end_handler()
             self._ready = True
 
     async def stop(self) -> None:
@@ -150,6 +155,7 @@ class VCManager:
                     task.cancel()
             self._auto_tasks.clear()
             self._play_tokens.clear()
+            self._stream_end_handler_registered = False
             self._ready = False
 
     async def get_assistant_identity(self) -> tuple[Optional[int], Optional[str]]:
@@ -195,6 +201,78 @@ class VCManager:
         self._play_tokens[chat_id] = token
         return token
 
+    @staticmethod
+    def _extract_chat_id_from_update(update: Any) -> Optional[int]:
+        """Best-effort extraction for different PyTgCalls update shapes."""
+        for attr in ("chat_id", "group_call_id"):
+            value = getattr(update, attr, None)
+            if isinstance(value, int):
+                return value
+
+        chat = getattr(update, "chat", None)
+        if chat is not None:
+            chat_id = getattr(chat, "id", None)
+            if isinstance(chat_id, int):
+                return chat_id
+
+        call = getattr(update, "call", None)
+        if call is not None:
+            chat_id = getattr(call, "chat_id", None)
+            if isinstance(chat_id, int):
+                return chat_id
+
+        return None
+
+    async def _on_stream_end(self, chat_id: int) -> None:
+        """Advance queue immediately when backend sends stream-end event."""
+        if not self._ready:
+            return
+        if chat_id not in self.now_playing:
+            return
+        if not self.queues.get(chat_id):
+            return
+        logger.info(
+            "VC auto-advance source=event chat_id=%s queue_len=%s",
+            chat_id,
+            len(self.queues.get(chat_id, [])),
+        )
+        try:
+            await self.skip(chat_id)
+        except Exception:
+            logger.warning("VC auto-advance source=event failed chat_id=%s", chat_id)
+            return
+
+    def _register_stream_end_handler(self) -> None:
+        """Register stream-end callback if current PyTgCalls build exposes one."""
+        if self._stream_end_handler_registered or not self._calls:
+            return
+
+        async def _handler(_: Any, update: Any) -> None:
+            chat_id = self._extract_chat_id_from_update(update)
+            if chat_id is None:
+                return
+            await self._on_stream_end(chat_id)
+
+        hooks = ("on_stream_end", "on_stream_ended")
+        for hook_name in hooks:
+            hook = getattr(self._calls, hook_name, None)
+            if not callable(hook):
+                continue
+            try:
+                # Decorator style: @calls.on_stream_end()
+                hook()(_handler)
+                self._stream_end_handler_registered = True
+                return
+            except Exception:
+                pass
+            try:
+                # Direct callback style: calls.on_stream_end(handler)
+                hook(_handler)
+                self._stream_end_handler_registered = True
+                return
+            except Exception:
+                pass
+
     async def _auto_advance_worker(self, chat_id: int, token: int, delay: int) -> None:
         try:
             await asyncio.sleep(delay)
@@ -202,7 +280,27 @@ class VCManager:
                 return
             if not self.queues.get(chat_id):
                 return
-            await self.skip(chat_id)
+            logger.info(
+                "VC auto-advance source=timer chat_id=%s queue_len=%s",
+                chat_id,
+                len(self.queues.get(chat_id, [])),
+            )
+            try:
+                await self.skip(chat_id)
+            except Exception:
+                # Keep queue moving even if one transition fails.
+                if self._play_tokens.get(chat_id) == token and self.queues.get(chat_id):
+                    logger.warning(
+                        "VC auto-advance source=timer retrying chat_id=%s queue_len=%s",
+                        chat_id,
+                        len(self.queues.get(chat_id, [])),
+                    )
+                    await asyncio.sleep(1)
+                    try:
+                        await self.skip(chat_id)
+                    except Exception:
+                        logger.warning("VC auto-advance source=timer failed chat_id=%s", chat_id)
+                        return
         except asyncio.CancelledError:
             return
         except Exception:
@@ -550,11 +648,22 @@ class VCManager:
             self.now_playing.pop(chat_id, None)
             self._cleanup_track_file(old_track)
             return None
+        # Try queued tracks until one starts successfully.
+        while queue:
+            next_track = queue.pop(0)
+            try:
+                await self._play_track(chat_id, next_track)
+                self._cleanup_track_file(old_track)
+                return next_track
+            except Exception:
+                # Broken entry in queue: discard and continue with next.
+                self._cleanup_track_file(next_track)
+                continue
 
-        next_track = queue.pop(0)
-        await self._play_track(chat_id, next_track)
+        # Queue exhausted due failures.
+        self.now_playing.pop(chat_id, None)
         self._cleanup_track_file(old_track)
-        return next_track
+        return None
 
     async def stop_chat(self, chat_id: int) -> None:
         old_track = self.now_playing.get(chat_id)
