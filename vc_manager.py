@@ -518,23 +518,6 @@ class VCManager:
         if cookie_file:
             base_opts["cookiefile"] = cookie_file
 
-        format_profiles = [
-            {
-                "format": "bestaudio[ext=m4a]/bestaudio/best",
-                "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
-            },
-            {
-                "format": "bestaudio/best",
-                "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
-            },
-            {
-                "format": "bestaudio/best",
-                "extractor_args": {"youtube": {"player_client": ["ios", "mweb", "tv"]}},
-            },
-            {"format": "best"},
-            {},
-        ]
-
         query_is_url = self._is_url(query)
         search_target = query if query_is_url else f"ytsearch1:{query}"
         last_error: Optional[Exception] = None
@@ -592,60 +575,15 @@ class VCManager:
             except Exception:
                 pass
 
+        # Always-download mode for VC reliability:
+        # resolve/search first, then download local audio and play that file in VC.
         for candidate_title, candidate_url in candidates:
-            for profile in format_profiles:
-                detail_opts = dict(base_opts)
-                detail_opts.update(profile)
-                try:
-                    with self._yt_dlp.YoutubeDL(detail_opts) as ydl:
-                        detailed = ydl.extract_info(candidate_url, download=False)
-                    if not detailed:
-                        raise RuntimeError("Could not resolve stream info")
-                    stream_url = self._pick_stream_url(detailed)
-                    if not stream_url:
-                        raise RuntimeError("Could not resolve audio stream url (no playable format)")
-
-                    final_title = detailed.get("title") or candidate_title or "Unknown Title"
-                    final_url = detailed.get("webpage_url") or candidate_url
-                    final_duration = detailed.get("duration")
-                    if not isinstance(final_duration, int):
-                        try:
-                            final_duration = int(final_duration) if final_duration else None
-                        except Exception:
-                            final_duration = None
-                    final_thumbnail = detailed.get("thumbnail")
-                    if not final_thumbnail:
-                        thumbs = detailed.get("thumbnails") or []
-                        if thumbs and isinstance(thumbs, list):
-                            last_thumb = thumbs[-1] if thumbs else {}
-                            if isinstance(last_thumb, dict):
-                                final_thumbnail = last_thumb.get("url")
-                    return VCTrack(
-                        title=final_title[:120],
-                        webpage_url=final_url,
-                        stream_url=stream_url,
-                        requested_by=requested_by,
-                        is_local=False,
-                        duration=final_duration,
-                        thumbnail=final_thumbnail,
-                    )
-                except Exception as e:
-                    err = str(e)
-                    if self._is_antibot_error(err):
-                        raise RuntimeError(
-                            "YouTube blocked anonymous extraction for this track. "
-                            "Set YTDLP_COOKIES (Netscape cookies text) or YTDLP_COOKIE_FILE in Railway vars, then redeploy."
-                        ) from e
-                    last_error = e
-                    continue
-
-            # Final fallback for format-restricted videos: local download then VC play.
-            if self._is_youtube_url(candidate_url):
-                dl_track = self._resolve_track_via_download_sync(
-                    candidate_url, candidate_title, requested_by, base_opts
-                )
-                if dl_track:
-                    return dl_track
+            dl_track = self._resolve_track_via_download_sync(
+                candidate_url, candidate_title, requested_by, base_opts
+            )
+            if dl_track:
+                return dl_track
+            last_error = RuntimeError(f"Download fallback failed for candidate: {candidate_url}")
 
         # Extra recovery path: if original URL is restricted, try similar search results and download fallback.
         if query_is_url and self._is_youtube_url(webpage_url):
