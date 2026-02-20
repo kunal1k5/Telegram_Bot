@@ -4737,6 +4737,37 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         assistant_id, assistant_username = await vc.get_assistant_identity()
         requested_by = update.effective_user.first_name or "User"
+        assistant_mention = (
+            f"@{assistant_username}" if assistant_username else "configured assistant account"
+        )
+
+        def _assistant_help_text(reason: str, is_banned: bool = False) -> str:
+            base_lines = [
+                "Assistant could not be prepared for VC playback.",
+                "",
+                f"Reason: {reason}",
+                "",
+                f"Assistant: {assistant_mention}",
+            ]
+            if assistant_id:
+                base_lines.append(f"ID: {assistant_id}")
+            if is_banned and assistant_id:
+                base_lines.extend(
+                    [
+                        "",
+                        f"Please use: /unban {assistant_id}",
+                        "Then try /play again.",
+                    ]
+                )
+            else:
+                base_lines.extend(
+                    [
+                        "",
+                        "If assistant is banned, unban it.",
+                        "Also ensure bot has Invite Users via Link permission.",
+                    ]
+                )
+            return "\n".join(base_lines)
 
         async def _recover_assistant_membership() -> None:
             if not assistant_id:
@@ -4777,14 +4808,24 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     mode, track = await vc.enqueue_or_play(chat_id, query, requested_by)
                 except Exception as retry_exc:
                     retry_text = str(retry_exc).lower()
+                    banned_markers = ("banned", "kicked", "blocked", "user_deactivated_ban")
+                    if any(marker in retry_text for marker in banned_markers):
+                        raise RuntimeError(
+                            _assistant_help_text(
+                                "Assistant is banned/blocked in this group.",
+                                is_banned=True,
+                            )
+                        ) from retry_exc
                     if "not enough rights" in retry_text or "administrator" in retry_text or "invite" in retry_text:
                         raise RuntimeError(
-                            "Bot needs invite permission to add assistant. "
-                            "Make bot admin with Invite Users via Link, or add assistant manually."
+                            _assistant_help_text(
+                                "Bot lacks invite/admin permission to auto-add assistant."
+                            )
                         ) from retry_exc
                     raise RuntimeError(
-                        "Assistant could not join this group automatically. "
-                        f"Please unban/add assistant manually and try again. Details: {retry_exc}"
+                        _assistant_help_text(
+                            f"Automatic assistant join failed ({type(retry_exc).__name__})."
+                        )
                     ) from retry_exc
             else:
                 raise

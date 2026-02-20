@@ -188,6 +188,12 @@ class VCManager:
         try:
             if track.stream_url and os.path.exists(track.stream_url):
                 os.remove(track.stream_url)
+                parent = os.path.dirname(track.stream_url)
+                if parent and os.path.basename(parent).startswith("animx_vc_dl_"):
+                    try:
+                        os.rmdir(parent)
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -421,6 +427,61 @@ class VCManager:
             out.append((title, url))
         return out
 
+    def _resolve_track_via_download_sync(
+        self,
+        candidate_url: str,
+        candidate_title: str,
+        requested_by: str,
+        base_opts: dict[str, Any],
+    ) -> Optional[VCTrack]:
+        """Fallback: download audio locally and play as local VC track."""
+        dl_dir = tempfile.mkdtemp(prefix="animx_vc_dl_")
+        dl_opts = dict(base_opts)
+        dl_opts.update(
+            {
+                "quiet": True,
+                "noplaylist": True,
+                "format": "bestaudio/best",
+                "outtmpl": os.path.join(dl_dir, "%(id)s.%(ext)s"),
+                "restrictfilenames": True,
+                "skip_download": False,
+                "extract_flat": False,
+            }
+        )
+        try:
+            with self._yt_dlp.YoutubeDL(dl_opts) as ydl:
+                info = ydl.extract_info(candidate_url, download=True)
+            if not info:
+                return None
+            downloaded = ydl.prepare_filename(info)
+            if not downloaded or not os.path.exists(downloaded):
+                for name in os.listdir(dl_dir):
+                    full = os.path.join(dl_dir, name)
+                    if os.path.isfile(full):
+                        downloaded = full
+                        break
+            if not downloaded or not os.path.exists(downloaded):
+                return None
+
+            final_duration = info.get("duration")
+            if not isinstance(final_duration, int):
+                try:
+                    final_duration = int(final_duration) if final_duration else None
+                except Exception:
+                    final_duration = None
+            final_thumbnail = info.get("thumbnail")
+            return VCTrack(
+                title=(info.get("title") or candidate_title or "Downloaded Track")[:120],
+                webpage_url=info.get("webpage_url") or candidate_url,
+                stream_url=downloaded,
+                requested_by=requested_by,
+                is_local=True,
+                duration=final_duration,
+                thumbnail=final_thumbnail,
+            )
+        except Exception:
+            return None
+
     def _resolve_track_sync(self, query: str, requested_by: str) -> VCTrack:
         base_opts = {
             "quiet": True,
@@ -554,6 +615,14 @@ class VCManager:
                         ) from e
                     last_error = e
                     continue
+
+            # Final fallback for format-restricted videos: local download then VC play.
+            if self._is_youtube_url(candidate_url):
+                dl_track = self._resolve_track_via_download_sync(
+                    candidate_url, candidate_title, requested_by, base_opts
+                )
+                if dl_track:
+                    return dl_track
 
         if last_error:
             raise RuntimeError(f"Could not resolve stream: {last_error}") from last_error
