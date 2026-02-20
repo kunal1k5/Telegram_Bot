@@ -45,6 +45,7 @@ class VCManager:
 
         self.queues: dict[int, list[VCTrack]] = {}
         self.now_playing: dict[int, VCTrack] = {}
+        self.history: dict[int, list[VCTrack]] = {}
         self.active_calls: set[int] = set()
         self._auto_tasks: dict[int, asyncio.Task] = {}
         self._play_tokens: dict[int, int] = {}
@@ -350,6 +351,19 @@ class VCManager:
         self.active_calls.discard(chat_id)
         stale_track = self.now_playing.pop(chat_id, None)
         self._cleanup_track_file(stale_track)
+        stale_history = self.history.pop(chat_id, [])
+        for item in stale_history:
+            self._cleanup_track_file(item)
+
+    def _push_history(self, chat_id: int, track: Optional[VCTrack], max_items: int = 12) -> None:
+        if not track:
+            return
+        stack = self.history.setdefault(chat_id, [])
+        stack.append(track)
+        if len(stack) <= max_items:
+            return
+        stale = stack.pop(0)
+        self._cleanup_track_file(stale)
 
     def _is_url(self, text: str) -> bool:
         return bool(re.match(r"^https?://", text.strip(), re.IGNORECASE))
@@ -795,7 +809,7 @@ class VCManager:
             next_track = queue.pop(0)
             try:
                 await self._play_track(chat_id, next_track)
-                self._cleanup_track_file(old_track)
+                self._push_history(chat_id, old_track)
                 return next_track
             except Exception:
                 # Broken entry in queue: discard and continue with next.
@@ -806,9 +820,33 @@ class VCManager:
         await self.stop_chat(chat_id)
         return None
 
+    async def play_previous(self, chat_id: int) -> Optional[VCTrack]:
+        stack = self.history.get(chat_id, [])
+        if not stack:
+            return None
+
+        previous_track = stack.pop()
+        current_track = self.now_playing.get(chat_id)
+        self._cancel_auto_task(chat_id)
+        self._paused_chats.discard(chat_id)
+        if current_track:
+            self.queues.setdefault(chat_id, []).insert(0, current_track)
+
+        try:
+            await self._play_track(chat_id, previous_track)
+            return previous_track
+        except Exception as e:
+            if current_track and self.queues.get(chat_id):
+                q = self.queues.get(chat_id) or []
+                if q and q[0] is current_track:
+                    q.pop(0)
+            stack.append(previous_track)
+            raise RuntimeError(f"Could not play previous track: {e}") from e
+
     async def stop_chat(self, chat_id: int) -> None:
         old_track = self.now_playing.get(chat_id)
         queued_tracks = self.queues.get(chat_id, [])
+        history_tracks = self.history.get(chat_id, [])
         self._cancel_auto_task(chat_id)
         self._play_tokens.pop(chat_id, None)
         self._paused_chats.discard(chat_id)
@@ -816,16 +854,25 @@ class VCManager:
             self._cleanup_track_file(old_track)
             for item in queued_tracks:
                 self._cleanup_track_file(item)
+            for item in history_tracks:
+                self._cleanup_track_file(item)
+            self.queues.pop(chat_id, None)
+            self.history.pop(chat_id, None)
+            self.now_playing.pop(chat_id, None)
+            self.active_calls.discard(chat_id)
             return
         try:
             await self._calls.leave_group_call(chat_id)
         except Exception:
             pass
         self.queues.pop(chat_id, None)
+        self.history.pop(chat_id, None)
         self.now_playing.pop(chat_id, None)
         self.active_calls.discard(chat_id)
         self._cleanup_track_file(old_track)
         for item in queued_tracks:
+            self._cleanup_track_file(item)
+        for item in history_tracks:
             self._cleanup_track_file(item)
 
     async def pause_chat(self, chat_id: int) -> None:

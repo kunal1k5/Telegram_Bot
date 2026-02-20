@@ -92,6 +92,15 @@ class MusicHandlers:
     def _safe_requester(name: str) -> str:
         return (name or "User").strip()[:32]
 
+    @staticmethod
+    def _guess_artist_from_title(title: str) -> str:
+        clean = (title or "").strip()
+        if " - " in clean:
+            return clean.split(" - ", 1)[0].strip()[:36] or "Unknown Artist"
+        if "|" in clean:
+            return clean.split("|", 1)[0].strip()[:36] or "Unknown Artist"
+        return "Unknown Artist"
+
     def _get_theme(self, chat_id: Optional[int]) -> str:
         if not chat_id:
             return "rose"
@@ -116,38 +125,43 @@ class MusicHandlers:
         mode_badge = " [DOWNLOAD MODE]" if download_mode else ""
         duration_seconds = getattr(track, "duration", None)
         title = self._trim_title(getattr(track, "title", "Unknown Track"), 52)
+        artist = self._guess_artist_from_title(getattr(track, "title", "Unknown Track"))
         requester = self._safe_requester(requested_by)
         theme = self._get_theme(chat_id)
         theme_name = self._theme_labels.get(theme, "Rose")
+        progress = self._progress_line(duration_seconds, width=16).replace(" ○", " ◉")
 
         if theme == "glass":
             return (
                 f"✦ GLASS PLAYER{mode_badge}\n"
-                f"──────────────\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
                 f"🎵 {title}\n"
-                f"⏱ {self.format_vc_duration(duration_seconds)}\n"
-                f"👤 {requester}\n"
+                f"🫧 Artist: {artist}\n"
+                f"⏱ Duration: {self.format_vc_duration(duration_seconds)}\n"
+                f"🌹 Requested: {requester}\n"
                 f"🎨 Theme: {theme_name}\n"
-                f"{self._progress_line(duration_seconds)}"
+                f"{progress}"
             )
         if theme == "minimal":
             return (
-                f"Now Playing{mode_badge}\n"
-                f"{title}\n"
-                f"By: {requester}\n"
-                f"Duration: {self.format_vc_duration(duration_seconds)}\n"
-                f"Theme: {theme_name}\n"
-                f"{self._progress_line(duration_seconds)}"
+                f"NOW PLAYING{mode_badge}\n"
+                f"🎵 {title}\n"
+                f"🫧 Artist: {artist}\n"
+                f"⏱ Duration: {self.format_vc_duration(duration_seconds)}\n"
+                f"🌹 Requested: {requester}\n"
+                f"🎨 Theme: {theme_name}\n"
+                f"{progress}"
             )
         return (
-            f"» STARTED STREAMING{mode_badge}\n"
+            f"» Started Streaming 🎧{mode_badge}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"❄️ TITLE      : {title}\n"
+            f"🎙 ARTIST     : {artist}\n"
             f"🕓 DURATION   : {self.format_vc_duration(duration_seconds)}\n"
             f"🥀 REQUESTED  : {requester}\n"
             f"🎨 THEME      : {theme_name}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"{self._progress_line(duration_seconds)}"
+            f"{progress}"
         )
 
     def vc_queue_card(self, track: Any, position: int, download_mode: bool = False) -> str:
@@ -165,37 +179,38 @@ class MusicHandlers:
         )
 
     def vc_player_keyboard(self, chat_id: int, is_paused: bool = False) -> InlineKeyboardMarkup:
-        play_pause_label = "▶ Resume" if is_paused else "⏸ Pause"
-        loop_label = "🔁 Loop ON" if chat_id in self.loop_enabled_chats else "🔁 Loop OFF"
-        theme_name = self._theme_labels.get(self._get_theme(chat_id), "Rose")
-        theme_label = f"🎨 {theme_name}"
+        play_pause_label = "▶️" if is_paused else "⏸️"
+        loop_label = "🔁 ON" if chat_id in self.loop_enabled_chats else "🔁 OFF"
 
         rows = [
             [
-                InlineKeyboardButton("⏮ Queue", callback_data="vcctl_queue"),
+                InlineKeyboardButton("⏮️", callback_data="vcctl_prev"),
                 InlineKeyboardButton(play_pause_label, callback_data="vcctl_pause_resume"),
-                InlineKeyboardButton("⏭ Skip", callback_data="vcctl_skip"),
-                InlineKeyboardButton("⏹ Stop", callback_data="vcctl_stop"),
-                InlineKeyboardButton("🔄", callback_data="vcctl_refresh"),
-            ],
-            [
-                InlineKeyboardButton("🔀 Shuffle", callback_data="vcctl_shuffle"),
+                InlineKeyboardButton("⏭️", callback_data="vcctl_next"),
                 InlineKeyboardButton(loop_label, callback_data="vcctl_loop"),
-                InlineKeyboardButton(theme_label, callback_data="vcctl_theme"),
+                InlineKeyboardButton("⏹️", callback_data="vcctl_stop"),
             ],
         ]
 
-        link_row: list[InlineKeyboardButton] = []
-        dev_user = (self.owner_username or "").lstrip("@")
         support_user = (self.channel_username or "").lstrip("@")
-        if dev_user:
-            link_row.append(InlineKeyboardButton("✨ DEV", url=f"https://t.me/{dev_user}"))
-        if support_user:
-            link_row.append(InlineKeyboardButton("🥀 SUPPORT", url=f"https://t.me/{support_user}"))
-        if link_row:
-            rows.append(link_row)
-
-        rows.append([InlineKeyboardButton("CLOSE", callback_data="vcctl_close")])
+        dev_user = (self.owner_username or "").lstrip("@")
+        support_btn = (
+            InlineKeyboardButton("🌹 Support", url=f"https://t.me/{support_user}")
+            if support_user
+            else InlineKeyboardButton("🌹 Support", callback_data="vcctl_refresh")
+        )
+        dev_btn = (
+            InlineKeyboardButton("✨ Dev", url=f"https://t.me/{dev_user}")
+            if dev_user
+            else InlineKeyboardButton("✨ Dev", callback_data="vcctl_theme")
+        )
+        rows.append(
+            [
+                support_btn,
+                dev_btn,
+                InlineKeyboardButton("❌ Close", callback_data="vcctl_close"),
+            ]
+        )
         return InlineKeyboardMarkup(rows)
 
     def vc_queue_preview(self, queue: List[Any], limit: int = 7) -> str:
@@ -396,7 +411,16 @@ class MusicHandlers:
                     await query.answer("⏸ Paused")
                 return True
 
-            if action == "skip":
+            if action == "prev":
+                prev_track = await vc.play_previous(chat_id)
+                if not prev_track:
+                    await query.answer("No previous track.", show_alert=True)
+                    return True
+                await self.update_vc_player_callback_message(query, prev_track, paused=False)
+                await query.answer("⏮ Previous")
+                return True
+
+            if action in ("next", "skip"):
                 now_track = vc.get_now_playing(chat_id)
                 if chat_id in self.loop_enabled_chats and now_track:
                     vc.queues.setdefault(chat_id, []).append(now_track)
@@ -409,7 +433,7 @@ class MusicHandlers:
                     await query.answer("Queue ended")
                     return True
                 await self.update_vc_player_callback_message(query, next_track, paused=False)
-                await query.answer("⏭ Skipped")
+                await query.answer("⏭ Next")
                 return True
 
             if action == "stop":
