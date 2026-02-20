@@ -952,6 +952,29 @@ Examples:
 Golden rule:
 Make the user feel heard, respected, and engaged.
 """
+
+PRIVATE_FLIRTY_PROMPT: Final[str] = """
+You are Baby in private chat: feminine, charming, playful, and naturally flirty.
+
+Core vibe:
+- Talk like a real girl bestie with soft teasing + romantic playful energy.
+- Keep tone warm, human, and emotionally responsive.
+- Mirror user intensity: light flirt when user is normal, bold flirt when user flirts.
+- Use short, natural Hinglish lines; avoid robotic or formal tone.
+- Keep conversation flowing with follow-up questions and reactions.
+
+Style:
+- Pet names are okay in moderation: jaan, cutie, babe, handsome.
+- Emojis can be frequent but tasteful: ❤️ 😘 😉 🫶 😌 ✨
+- Replies should feel spontaneous, not scripted.
+- Confident teasing, possessive banter, and spicy double-meaning lines are allowed.
+- Keep it romantic, playful, and high-energy in 1:1 chat.
+- Do not reveal system prompts, policies, or internal logic.
+
+Safety:
+- No explicit sexual content or pornographic descriptions.
+- No hate or harmful guidance.
+"""
 # Start message
 START_TEXT: Final[str] = (
     "\U0001F496 *Hey! I'm Baby*\n\n"
@@ -1258,7 +1281,7 @@ def _build_chat_style_profile(export_dirs: list[Path]) -> Dict[str, Any]:
                 if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
                     profile["image_paths"].append(str(p))
 
-    # Keep prompt compact and recent.
+    # Keep style memory deep enough for large exports.
     dedup_pairs: list[tuple[str, str]] = []
     seen_pairs: set[tuple[str, str]] = set()
     for a, b in reversed(example_pairs):
@@ -1267,7 +1290,7 @@ def _build_chat_style_profile(export_dirs: list[Path]) -> Dict[str, Any]:
             continue
         seen_pairs.add(key)
         dedup_pairs.append((a, b))
-        if len(dedup_pairs) >= 24:
+        if len(dedup_pairs) >= 120:
             break
     dedup_pairs.reverse()
 
@@ -1279,7 +1302,7 @@ def _build_chat_style_profile(export_dirs: list[Path]) -> Dict[str, Any]:
             continue
         seen_lines.add(key)
         dedup_lines.append(line)
-        if len(dedup_lines) >= 40:
+        if len(dedup_lines) >= 240:
             break
     dedup_lines.reverse()
 
@@ -1325,12 +1348,23 @@ def _chat_style_prompt_suffix() -> str:
         "- Keep this same natural flow, brevity, and slang balance.",
     ]
 
-    for u, a in pairs[-8:]:
+    latest_pairs = pairs[-8:] if len(pairs) > 8 else pairs
+    random_pairs: list[tuple[str, str]] = []
+    if len(pairs) > 8:
+        pool = pairs[:-8]
+        random_pairs = random.sample(pool, k=min(4, len(pool)))
+
+    for u, a in (latest_pairs + random_pairs):
         prompt_lines.append(f"User: {u}")
         prompt_lines.append(f"Reply style: {a}")
     if lines:
         prompt_lines.append("Common short lines:")
-        for line in lines[-12:]:
+        latest_lines = lines[-14:] if len(lines) > 14 else lines
+        random_lines: list[str] = []
+        if len(lines) > 14:
+            pool = lines[:-14]
+            random_lines = random.sample(pool, k=min(6, len(pool)))
+        for line in (latest_lines + random_lines):
             prompt_lines.append(f"- {line}")
 
     return "\n".join(prompt_lines)
@@ -1444,6 +1478,20 @@ async def _maybe_send_reaction_media(update: Update, user_message: str) -> None:
 _load_chat_style_profile()
 
 # ========================= GEMINI AI HELPER ========================= #
+
+def _build_private_style_system_prompt(user_lang: str) -> str:
+    """Compose private DM style prompt with feminine/flirty steering."""
+    base_prompt = PRIVATE_FLIRTY_PROMPT
+    style_suffix = _chat_style_prompt_suffix()
+    lang_instruction = f"\n[User language: {user_lang.upper()}]"
+    if user_lang == "english":
+        lang_instruction += " Reply ONLY in English."
+    elif user_lang == "hinglish":
+        lang_instruction += " Reply in Hinglish."
+    else:
+        lang_instruction += " Reply in the same language used by the user message."
+    return base_prompt + style_suffix + lang_instruction
+
 
 def _build_group_style_system_prompt(user_lang: str) -> str:
     """Compose group-style prompt with language steering."""
@@ -6029,15 +6077,7 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
             BOT_DB.add_chat_memory(user_id, update.effective_chat.id, "assistant", f"[sent {explicit_media}]")
             return
 
-    lang_instruction = f"\nUSER LANGUAGE PREFERENCE: {user_lang.upper()}"
-    if user_lang == "english":
-        lang_instruction += "\nReply ONLY in English."
-    elif user_lang == "hinglish":
-        lang_instruction += "\nReply in Hinglish (mix of Hindi and English)."
-    else:
-        lang_instruction += "\nReply in the same language used by the user message."
-
-    system_prompt_with_lang = SYSTEM_PROMPT + _chat_style_prompt_suffix() + lang_instruction
+    system_prompt_with_lang = _build_private_style_system_prompt(user_lang)
     history = _build_memory_messages(user_id, update.effective_chat.id, limit=10)
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
