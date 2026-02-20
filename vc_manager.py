@@ -341,6 +341,28 @@ class VCManager:
         s = text.lower()
         return "youtube.com/" in s or "youtu.be/" in s
 
+    def _extract_youtube_video_id(self, url: str) -> Optional[str]:
+        """Extract canonical YouTube video id from common URL shapes."""
+        try:
+            parsed = urllib.parse.urlparse(url)
+            host = (parsed.netloc or "").lower()
+            path = parsed.path or ""
+            if "youtu.be" in host:
+                vid = path.strip("/").split("/")[0]
+                return vid or None
+            if "youtube.com" in host:
+                if path == "/watch":
+                    q = urllib.parse.parse_qs(parsed.query)
+                    vid = (q.get("v") or [None])[0]
+                    return vid
+                # /shorts/<id>, /embed/<id>, /live/<id>
+                parts = [p for p in path.split("/") if p]
+                if len(parts) >= 2 and parts[0] in {"shorts", "embed", "live"}:
+                    return parts[1]
+        except Exception:
+            return None
+        return None
+
     def _fetch_youtube_oembed_title(self, url: str) -> Optional[str]:
         """Fetch video title via YouTube oEmbed (works even when formats are restricted)."""
         try:
@@ -461,9 +483,18 @@ class VCManager:
                 "extractor_args": {"youtube": {"player_client": ["android", "web", "ios", "mweb"]}},
             },
             {
+                "format": "bestaudio[acodec!=none]/bestaudio/best",
+                "extractor_args": {"youtube": {"player_client": ["tv", "tv_embedded", "web_creator"]}},
+            },
+            {
                 "format": "bestaudio/best",
                 "extractor_args": {"youtube": {"player_client": ["android", "web", "ios", "mweb"]}},
             },
+            {
+                "format": "bestaudio/best",
+                "extractor_args": {"youtube": {"player_client": ["tv", "tv_embedded", "web_creator"]}},
+            },
+            {"format": "ba/b"},
             {"format": "best"},
             {},  # no format preference - let yt-dlp choose
         ]
@@ -616,14 +647,29 @@ class VCManager:
                     oembed_title = self._fetch_youtube_oembed_title(webpage_url)
                     if oembed_title:
                         fallback_query = oembed_title
-                for alt_title, alt_url in self._extract_search_candidates(fallback_query, base_opts, limit=8):
-                    if alt_url == webpage_url:
-                        continue
-                    dl_track = self._resolve_track_via_download_sync(
-                        alt_url, alt_title, requested_by, base_opts
-                    )
-                    if dl_track:
-                        return dl_track
+                video_id = self._extract_youtube_video_id(webpage_url)
+                search_queries: list[str] = []
+                seen: set[str] = set()
+                for q in (
+                    fallback_query,
+                    f"{fallback_query} audio",
+                    f"{fallback_query} official audio",
+                    video_id or "",
+                ):
+                    q = (q or "").strip()
+                    if q and q not in seen:
+                        seen.add(q)
+                        search_queries.append(q)
+
+                for q in search_queries:
+                    for alt_title, alt_url in self._extract_search_candidates(q, base_opts, limit=10):
+                        if alt_url == webpage_url:
+                            continue
+                        dl_track = self._resolve_track_via_download_sync(
+                            alt_url, alt_title, requested_by, base_opts
+                        )
+                        if dl_track:
+                            return dl_track
             except Exception:
                 pass
 
