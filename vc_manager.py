@@ -436,51 +436,74 @@ class VCManager:
     ) -> Optional[VCTrack]:
         """Fallback: download audio locally and play as local VC track."""
         dl_dir = tempfile.mkdtemp(prefix="animx_vc_dl_")
-        dl_opts = dict(base_opts)
-        dl_opts.update(
+        profile_opts: list[dict[str, Any]] = [
             {
-                "quiet": True,
-                "noplaylist": True,
+                "format": "bestaudio[acodec!=none]/bestaudio/best",
+                "extractor_args": {"youtube": {"player_client": ["android", "web", "ios", "mweb"]}},
+            },
+            {
                 "format": "bestaudio/best",
-                "outtmpl": os.path.join(dl_dir, "%(id)s.%(ext)s"),
-                "restrictfilenames": True,
-                "skip_download": False,
-                "extract_flat": False,
-            }
-        )
+                "extractor_args": {"youtube": {"player_client": ["android", "web", "ios", "mweb"]}},
+            },
+            {"format": "best"},
+            {},  # no format preference - let yt-dlp choose
+        ]
         try:
-            with self._yt_dlp.YoutubeDL(dl_opts) as ydl:
-                info = ydl.extract_info(candidate_url, download=True)
-            if not info:
-                return None
-            downloaded = ydl.prepare_filename(info)
-            if not downloaded or not os.path.exists(downloaded):
-                for name in os.listdir(dl_dir):
-                    full = os.path.join(dl_dir, name)
-                    if os.path.isfile(full):
-                        downloaded = full
-                        break
-            if not downloaded or not os.path.exists(downloaded):
-                return None
-
-            final_duration = info.get("duration")
-            if not isinstance(final_duration, int):
+            for profile in profile_opts:
+                dl_opts = dict(base_opts)
+                dl_opts.update(
+                    {
+                        "quiet": True,
+                        "noplaylist": True,
+                        "outtmpl": os.path.join(dl_dir, "%(id)s.%(ext)s"),
+                        "restrictfilenames": True,
+                        "skip_download": False,
+                        "extract_flat": False,
+                    }
+                )
+                dl_opts.update(profile)
                 try:
-                    final_duration = int(final_duration) if final_duration else None
+                    with self._yt_dlp.YoutubeDL(dl_opts) as ydl:
+                        info = ydl.extract_info(candidate_url, download=True)
+                    if not info:
+                        continue
+                    downloaded = ydl.prepare_filename(info)
+                    if not downloaded or not os.path.exists(downloaded):
+                        for name in os.listdir(dl_dir):
+                            full = os.path.join(dl_dir, name)
+                            if os.path.isfile(full):
+                                downloaded = full
+                                break
+                    if not downloaded or not os.path.exists(downloaded):
+                        continue
+
+                    final_duration = info.get("duration")
+                    if not isinstance(final_duration, int):
+                        try:
+                            final_duration = int(final_duration) if final_duration else None
+                        except Exception:
+                            final_duration = None
+                    final_thumbnail = info.get("thumbnail")
+                    return VCTrack(
+                        title=(info.get("title") or candidate_title or "Downloaded Track")[:120],
+                        webpage_url=info.get("webpage_url") or candidate_url,
+                        stream_url=downloaded,
+                        requested_by=requested_by,
+                        is_local=True,
+                        duration=final_duration,
+                        thumbnail=final_thumbnail,
+                    )
                 except Exception:
-                    final_duration = None
-            final_thumbnail = info.get("thumbnail")
-            return VCTrack(
-                title=(info.get("title") or candidate_title or "Downloaded Track")[:120],
-                webpage_url=info.get("webpage_url") or candidate_url,
-                stream_url=downloaded,
-                requested_by=requested_by,
-                is_local=True,
-                duration=final_duration,
-                thumbnail=final_thumbnail,
-            )
+                    continue
         except Exception:
-            return None
+            pass
+        # Cleanup dir if nothing worked.
+        try:
+            if os.path.isdir(dl_dir) and not os.listdir(dl_dir):
+                os.rmdir(dl_dir)
+        except Exception:
+            pass
+        return None
 
     def _resolve_track_sync(self, query: str, requested_by: str) -> VCTrack:
         base_opts = {
@@ -623,6 +646,21 @@ class VCManager:
                 )
                 if dl_track:
                     return dl_track
+
+        # Extra recovery path: if original URL is restricted, try similar search results and download fallback.
+        if query_is_url and self._is_youtube_url(webpage_url):
+            try:
+                fallback_query = title if title and title != "Unknown Title" else query
+                for alt_title, alt_url in self._extract_search_candidates(fallback_query, base_opts, limit=8):
+                    if alt_url == webpage_url:
+                        continue
+                    dl_track = self._resolve_track_via_download_sync(
+                        alt_url, alt_title, requested_by, base_opts
+                    )
+                    if dl_track:
+                        return dl_track
+            except Exception:
+                pass
 
         if last_error:
             raise RuntimeError(f"Could not resolve stream: {last_error}") from last_error
