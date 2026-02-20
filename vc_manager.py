@@ -334,6 +334,23 @@ class VCManager:
         token = self._play_tokens.get(chat_id) or self._next_token(chat_id)
         self._schedule_auto_advance(chat_id, now_track, token)
 
+    def _is_playback_healthy(self, chat_id: int) -> bool:
+        """Heuristic: playback state is healthy only if call is active or explicitly paused."""
+        if chat_id in self.active_calls:
+            return True
+        if chat_id in self._paused_chats:
+            return True
+        return False
+
+    def _reset_chat_playback_state(self, chat_id: int) -> None:
+        """Drop stale playback markers for a chat."""
+        self._cancel_auto_task(chat_id)
+        self._play_tokens.pop(chat_id, None)
+        self._paused_chats.discard(chat_id)
+        self.active_calls.discard(chat_id)
+        stale_track = self.now_playing.pop(chat_id, None)
+        self._cleanup_track_file(stale_track)
+
     def _is_url(self, text: str) -> bool:
         return bool(re.match(r"^https?://", text.strip(), re.IGNORECASE))
 
@@ -725,6 +742,10 @@ class VCManager:
 
     async def enqueue_or_play(self, chat_id: int, query: str, requested_by: str) -> tuple[str, VCTrack]:
         track = await self.resolve_track(query, requested_by)
+        if chat_id in self.now_playing and not self._is_playback_healthy(chat_id):
+            logger.warning("VC stale playback state detected chat_id=%s; resetting state", chat_id)
+            self._reset_chat_playback_state(chat_id)
+
         if chat_id in self.now_playing:
             self.queues.setdefault(chat_id, []).append(track)
             self._ensure_auto_advance(chat_id)
@@ -750,6 +771,10 @@ class VCManager:
             duration=duration,
             thumbnail=None,
         )
+        if chat_id in self.now_playing and not self._is_playback_healthy(chat_id):
+            logger.warning("VC stale playback state detected chat_id=%s (local); resetting state", chat_id)
+            self._reset_chat_playback_state(chat_id)
+
         if chat_id in self.now_playing:
             self.queues.setdefault(chat_id, []).append(track)
             self._ensure_auto_advance(chat_id)
@@ -763,8 +788,7 @@ class VCManager:
         self._paused_chats.discard(chat_id)
         queue = self.queues.get(chat_id, [])
         if not queue:
-            self.now_playing.pop(chat_id, None)
-            self._cleanup_track_file(old_track)
+            await self.stop_chat(chat_id)
             return None
         # Try queued tracks until one starts successfully.
         while queue:
@@ -779,8 +803,7 @@ class VCManager:
                 continue
 
         # Queue exhausted due failures.
-        self.now_playing.pop(chat_id, None)
-        self._cleanup_track_file(old_track)
+        await self.stop_chat(chat_id)
         return None
 
     async def stop_chat(self, chat_id: int) -> None:

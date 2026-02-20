@@ -471,9 +471,11 @@ class MusicHandlers:
 
             if action == "close":
                 try:
+                    await vc.stop_chat(chat_id)
+                    self.loop_enabled_chats.discard(chat_id)
                     if query.message:
                         await query.message.delete()
-                    await query.answer("Closed")
+                    await query.answer("VC closed")
                 except Exception:
                     await query.answer("Could not close panel.", show_alert=True)
                 return True
