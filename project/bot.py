@@ -32,13 +32,13 @@ CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "YOUR_CHANNEL").strip("@")
 CONTACT_USERNAME = os.getenv("CONTACT_USERNAME", "YOUR_CONTACT").strip("@")
 
 
-def build_start_keyboard() -> InlineKeyboardMarkup:
+def build_start_keyboard(bot_username: str) -> InlineKeyboardMarkup:
     keyboard = [
-        [InlineKeyboardButton("💬 Chat With Me", url=f"https://t.me/{BOT_USERNAME}")],
+        [InlineKeyboardButton("💬 Chat With Me", url=f"https://t.me/{bot_username}")],
         [
             InlineKeyboardButton(
                 "➕ Add To Group",
-                url=f"https://t.me/{BOT_USERNAME}?startgroup=true",
+                url=f"https://t.me/{bot_username}?startgroup=true",
             )
         ],
         [
@@ -46,16 +46,16 @@ def build_start_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🎤 VC Guide", callback_data="vcguide"),
         ],
         [
-            InlineKeyboardButton("📢 Channel", url=f"https://t.me/{CHANNEL_USERNAME}"),
+            InlineKeyboardButton("📢 Channel", url="https://t.me/YOUR_CHANNEL"),
             InlineKeyboardButton("⚙ Settings", callback_data="settings"),
         ],
+        [InlineKeyboardButton("🎮 Mafia Game", callback_data="mafia_hub")],
         [
             InlineKeyboardButton(
                 "📩 Contact / Promotion",
-                url=f"https://t.me/{CONTACT_USERNAME}",
+                url="https://t.me/YOUR_CONTACT",
             )
         ],
-        [InlineKeyboardButton("🎮 Mafia Game", callback_data="mafia_hub")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -124,6 +124,7 @@ def _wins_rank_text(user_id: int) -> tuple[int, str, str]:
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    bot_username = context.bot.username
     user = update.effective_user.first_name
     text = (
         f"✨ HEY BABY {user} NICE TO MEET YOU 🌹\n\n"
@@ -134,7 +135,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "💬 Chat Naturally Like a Friend\n\n"
         "🌙 Good Evening 💖"
     )
-    await update.message.reply_text(text, reply_markup=build_start_keyboard())
+    await update.message.reply_text(text, reply_markup=build_start_keyboard(bot_username))
 
 
 async def mafia_hub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -348,7 +349,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     chat_id = q.message.chat.id
 
     if data == "back_start":
-        await q.edit_message_text("Main panel", reply_markup=build_start_keyboard())
+        await q.edit_message_text(
+            "Main panel",
+            reply_markup=build_start_keyboard(context.bot.username),
+        )
         return
     if data == "mafia_hub":
         await mafia_hub(update, context)
@@ -430,7 +434,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
         return
     if data in {"help", "vcguide", "settings"}:
-        await q.edit_message_text("This panel is under setup.", reply_markup=build_start_keyboard())
+        await q.edit_message_text(
+            "This panel is under setup.",
+            reply_markup=build_start_keyboard(context.bot.username),
+        )
         return
 
     try:
