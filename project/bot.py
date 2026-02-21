@@ -1,6 +1,7 @@
 import asyncio
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -26,6 +27,10 @@ from game.mafia_engine import (
     start_join_timer,
 )
 from game.shop import buy
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
 try:
     from start_card import create_start_card
 except Exception:
@@ -151,7 +156,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         else:
             banner_path = Path(START_BANNER_PATH)
             if not banner_path.is_absolute():
-                root_banner = Path(__file__).resolve().parent.parent / banner_path
+                root_banner = ROOT_DIR / banner_path
                 if root_banner.exists():
                     banner_path = root_banner
             if banner_path.exists() and create_start_card:
