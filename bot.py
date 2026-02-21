@@ -2310,7 +2310,8 @@ async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_T
         logger.error(f"Error in my_chat_member_handler: {e}")
 
 def _build_start_keyboard() -> InlineKeyboardMarkup:
-    keyboard = premium_start_buttons(BOT_USERNAME, CHANNEL_USERNAME).inline_keyboard
+    base_keyboard = premium_start_buttons(BOT_USERNAME, CHANNEL_USERNAME).inline_keyboard
+    keyboard = [list(row) for row in base_keyboard]
     keyboard.append([InlineKeyboardButton("Contact / Promotion", url=f"https://t.me/{CONTACT_USERNAME[1:]}")])
     return InlineKeyboardMarkup(keyboard)
 
