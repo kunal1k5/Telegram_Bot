@@ -77,7 +77,8 @@ class VCManager:
         self._paused_chats: set[int] = set()
 
         self._default_track_seconds = int(os.getenv("VC_DEFAULT_TRACK_SECONDS", "240"))
-        self._assistant_verify_ttl_seconds = int(os.getenv("VC_ASSISTANT_VERIFY_TTL_SECONDS", "600"))
+        # 0 => always re-verify assistant membership before VC actions (safer against stale state).
+        self._assistant_verify_ttl_seconds = int(os.getenv("VC_ASSISTANT_VERIFY_TTL_SECONDS", "0"))
         self._stream_end_handler_registered = False
 
     def _state(self, chat_id: int) -> VCChatState:
@@ -243,10 +244,13 @@ class VCManager:
     async def verify_assistant_once(self, chat_id: int) -> bool:
         state = self._state(chat_id)
         now = time.time()
+        ttl = self._assistant_verify_ttl_seconds
         if (
+            ttl > 0
+            and
             state.assistant_verified
             and state.assistant_verified_at > 0
-            and (now - state.assistant_verified_at) <= self._assistant_verify_ttl_seconds
+            and (now - state.assistant_verified_at) <= ttl
         ):
             return True
         is_in_chat = await self.is_assistant_in_chat(chat_id)
@@ -263,6 +267,7 @@ class VCManager:
         await self._assistant.join_chat(invite_link)
         for state in self._states.values():
             state.assistant_verified = False
+            state.assistant_verified_at = 0.0
 
     @staticmethod
     def _extract_chat_id_from_update(update: Any) -> Optional[int]:
@@ -684,6 +689,38 @@ class VCManager:
 
         return targets, canonical_chat_id
 
+    async def ensure_peer_access(self, chat_id: int) -> int:
+        """Resolve chat with assistant before VC call APIs; raises when peer is not resolvable."""
+        await self.start()
+        state = self._state(chat_id)
+        resolved = False
+        canonical_chat_id = chat_id
+        for candidate in self._chat_id_candidates(chat_id):
+            try:
+                chat = await self._assistant.get_chat(candidate)
+                candidate_id = getattr(chat, "id", None)
+                if isinstance(candidate_id, int):
+                    canonical_chat_id = candidate_id
+                    state.resolved_chat_id = candidate_id
+                    resolved = True
+                if hasattr(self._assistant, "resolve_peer"):
+                    try:
+                        peer = await self._assistant.resolve_peer(candidate_id or candidate)
+                        if peer is not None:
+                            state.resolved_peer = peer
+                    except Exception:
+                        pass
+                if resolved:
+                    break
+            except Exception:
+                continue
+
+        if not resolved:
+            state.assistant_verified = False
+            state.assistant_verified_at = 0.0
+            raise RuntimeError(f"Peer access failed for chat: {chat_id}")
+        return canonical_chat_id
+
     async def _start_or_replace_stream(self, chat_id: int, state: VCChatState, track: VCTrack) -> None:
         async def _attempt_once(target: Any) -> None:
             stream = self._make_input_stream(track.stream_url)
@@ -761,6 +798,7 @@ class VCManager:
         await self.start()
         if not await self.verify_assistant_once(chat_id):
             raise RuntimeError("Assistant account is not in this chat. Add/unban assistant once and retry.")
+        chat_id = await self.ensure_peer_access(chat_id)
 
         track = await self.resolve_track(query, requested_by)
         state = self._state(chat_id)
@@ -783,6 +821,7 @@ class VCManager:
         await self.start()
         if not await self.verify_assistant_once(chat_id):
             raise RuntimeError("Assistant account is not in this chat. Add/unban assistant once and retry.")
+        chat_id = await self.ensure_peer_access(chat_id)
 
         track = VCTrack(
             title=title[:120] if title else "Downloaded Track",
