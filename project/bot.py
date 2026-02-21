@@ -1,6 +1,7 @@
 import asyncio
 import os
 import subprocess
+from pathlib import Path
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatMemberStatus, ChatType
@@ -30,6 +31,9 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 BOT_USERNAME = os.getenv("BOT_USERNAME", "YOUR_BOT_USERNAME").strip("@")
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "YOUR_CHANNEL").strip("@")
 CONTACT_USERNAME = os.getenv("CONTACT_USERNAME", "YOUR_CONTACT").strip("@")
+START_PANEL_PHOTO_FILE_ID = os.getenv("START_PANEL_PHOTO_FILE_ID", "").strip()
+START_PANEL_PHOTO_URL = os.getenv("START_PANEL_PHOTO_URL", "").strip()
+START_BANNER_PATH = os.getenv("START_BANNER_PATH", "banner.jpg").strip()
 
 
 def start_panel_text(user_name: str) -> str:
@@ -131,10 +135,36 @@ def _wins_rank_text(user_id: int) -> tuple[int, str, str]:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     bot_username = context.bot.username
     user = update.effective_user.first_name or "Friend"
-    await update.message.reply_text(
-        start_panel_text(user),
-        reply_markup=build_start_keyboard(bot_username),
-    )
+    text = start_panel_text(user)
+    keyboard = build_start_keyboard(bot_username)
+
+    if START_PANEL_PHOTO_FILE_ID:
+        await update.message.reply_photo(
+            photo=START_PANEL_PHOTO_FILE_ID,
+            caption=text,
+            reply_markup=keyboard,
+        )
+        return
+
+    if START_PANEL_PHOTO_URL:
+        await update.message.reply_photo(
+            photo=START_PANEL_PHOTO_URL,
+            caption=text,
+            reply_markup=keyboard,
+        )
+        return
+
+    banner_path = Path(START_BANNER_PATH)
+    if banner_path.exists():
+        with banner_path.open("rb") as f:
+            await update.message.reply_photo(
+                photo=f,
+                caption=text,
+                reply_markup=keyboard,
+            )
+        return
+
+    await update.message.reply_text(text, reply_markup=keyboard)
 
 
 async def mafia_hub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
