@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime
 
@@ -8,47 +8,49 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 def get_dynamic_greeting() -> str:
     hour = datetime.now().hour
     if 5 <= hour < 12:
-        return "Good Morning"
+        return "🌅 Good Morning"
     if 12 <= hour < 18:
-        return "Good Afternoon"
+        return "🌞 Good Afternoon"
     if 18 <= hour < 23:
-        return "Good Evening"
-    return "Late Night Vibes"
+        return "🌙 Good Evening"
+    return "🌌 Late Night Vibes"
 
 
 def premium_start_caption(user_name: str = "Music Lover") -> str:
     greeting = get_dynamic_greeting()
     safe_name = (user_name or "Music Lover").strip()
     return (
-        "<b>BABY • Premium Music AI</b>\n\n"
-        f"{greeting}, <b>{safe_name}</b>\n\n"
-        "I am your cinematic music and chat companion.\n"
-        "Built for vibes, designed for performance.\n\n"
-        "Fast • Smart • Always Active\n"
-        "HD Voice Chat Streaming\n"
-        "Chat naturally like a friend\n"
-        "Advanced group controls\n\n"
-        "Ready to feel the vibe?"
+        f"✨ <b>HEY BABY {safe_name}</b> NICE TO MEET YOU 🌹\n\n"
+        "◎ THIS IS <b>『ANIMX MUSIC』</b>\n\n"
+        "➤ A premium designed music player bot for Telegram groups & channels.\n\n"
+        "🎧 HD Voice Chat Streaming\n"
+        "🚀 Fast • Smart • Always Active\n"
+        "💬 Chat Naturally Like a Friend\n\n"
+        f"{greeting} 💖"
     )
 
 
-def premium_start_buttons(bot_username: str, channel_username: str) -> InlineKeyboardMarkup:
+def premium_start_buttons(
+    bot_username: str,
+    channel_username: str,
+    support_url: str = "https://t.me",
+    source_url: str = "https://github.com",
+) -> InlineKeyboardMarkup:
+    _ = channel_username
     bot_name = bot_username.lstrip("@")
-    channel_name = channel_username.lstrip("@")
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("Chat With Me", url=f"https://t.me/{bot_name}"),
-                InlineKeyboardButton("Add To Group", url=f"https://t.me/{bot_name}?startgroup=true"),
+                InlineKeyboardButton(
+                    "◎ ADD ME TO YOUR CHAT ◎",
+                    url=f"https://t.me/{bot_name}?startgroup=true",
+                )
             ],
+            [InlineKeyboardButton("HELP AND COMMANDS", callback_data="help")],
             [
-                InlineKeyboardButton("Help", callback_data="help"),
-                InlineKeyboardButton("VC Guide", callback_data="vc_guide"),
+                InlineKeyboardButton("SUPPORT", url=support_url),
+                InlineKeyboardButton("SOURCE", url=source_url),
             ],
-            [
-                InlineKeyboardButton("Channel", url=f"https://t.me/{channel_name}"),
-                InlineKeyboardButton("Settings", callback_data="show_settings_info"),
-            ],
+            [InlineKeyboardButton("• BOT | YT-API INFO •", callback_data="info")],
         ]
     )
-

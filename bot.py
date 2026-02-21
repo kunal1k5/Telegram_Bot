@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import io
 import json
 import logging
@@ -88,6 +88,13 @@ START_STICKER_FILE_ID: Final[str] = os.getenv("START_STICKER_FILE_ID", "")
 START_PANEL_PHOTO_FILE_ID: Final[str] = os.getenv("START_PANEL_PHOTO_FILE_ID", "").strip()
 START_PANEL_PHOTO_URL: Final[str] = os.getenv("START_PANEL_PHOTO_URL", "").strip()
 START_BANNER_PATH: Final[str] = os.getenv("START_BANNER_PATH", "banner.jpg").strip()
+START_PANEL_VIDEO_FILE_ID: Final[str] = os.getenv("START_PANEL_VIDEO_FILE_ID", "").strip()
+START_PANEL_VIDEO_PATH: Final[str] = os.getenv(
+    "START_PANEL_VIDEO_PATH",
+    str(BASE_DIR / "asset" / "video" / "Bot_Description_Photo_GIF_Upload.mp4"),
+).strip()
+START_SUPPORT_URL: Final[str] = os.getenv("START_SUPPORT_URL", "https://t.me/your_support").strip()
+START_SOURCE_URL: Final[str] = os.getenv("START_SOURCE_URL", "https://github.com/kunal1k5/Telegram_Bot").strip()
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable not set!")
@@ -1216,7 +1223,7 @@ Core vibe:
 
 Style:
 - Pet names are okay in moderation: jaan, cutie, babe, handsome.
-- Emojis can be frequent but tasteful: ❤️ 😘 😉 🫶 😌 ✨
+- Emojis can be frequent but tasteful: â¤ï¸ ðŸ˜˜ ðŸ˜‰ ðŸ«¶ ðŸ˜Œ âœ¨
 - Replies should feel spontaneous, not scripted.
 - Confident teasing, possessive banter, and spicy double-meaning lines are allowed.
 - Keep it romantic, playful, and high-energy in 1:1 chat.
@@ -2314,10 +2321,30 @@ async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_T
         logger.error(f"Error in my_chat_member_handler: {e}")
 
 def _build_start_keyboard() -> InlineKeyboardMarkup:
-    base_keyboard = premium_start_buttons(BOT_USERNAME, CHANNEL_USERNAME).inline_keyboard
-    keyboard = [list(row) for row in base_keyboard]
-    keyboard.append([InlineKeyboardButton("Contact / Promotion", url=f"https://t.me/{CONTACT_USERNAME[1:]}")])
-    return InlineKeyboardMarkup(keyboard)
+    return premium_start_buttons(
+        BOT_USERNAME,
+        CHANNEL_USERNAME,
+        support_url=START_SUPPORT_URL,
+        source_url=START_SOURCE_URL,
+    )
+
+
+def _resolve_start_panel_video_path() -> Optional[Path]:
+    candidates = [
+        Path(START_PANEL_VIDEO_PATH).expanduser(),
+        BASE_DIR / "asset" / "video" / "Bot_Description_Photo_GIF_Upload.mp4",
+        BASE_DIR / "assest" / "video" / "Bot_Description_Photo_GIF_Upload.mp4",
+        BASE_DIR.parent / "asset" / "video" / "Bot_Description_Photo_GIF_Upload.mp4",
+        BASE_DIR.parent / "assest" / "video" / "Bot_Description_Photo_GIF_Upload.mp4",
+    ]
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+            if resolved.exists() and resolved.is_file():
+                return resolved
+        except Exception:
+            continue
+    return None
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2355,6 +2382,36 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     safe_name = html.escape(nickname)
     caption = premium_start_caption(safe_name)
     sent_panel = False
+
+    # Video-first premium start panel (file_id or local path), then fallback to image/text panel.
+    if START_PANEL_VIDEO_FILE_ID:
+        try:
+            await update.effective_message.reply_video(
+                video=START_PANEL_VIDEO_FILE_ID,
+                caption=caption,
+                parse_mode=ParseMode.HTML,
+                reply_markup=_build_start_keyboard(),
+            )
+            sent_panel = True
+        except Exception as e:
+            logger.warning(f"Could not send start panel video via file_id: {e}")
+
+    if not sent_panel:
+        try:
+            video_path = _resolve_start_panel_video_path()
+            if video_path:
+                with open(video_path, "rb") as vf:
+                    await update.effective_message.reply_video(
+                        video=vf,
+                        caption=caption,
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=_build_start_keyboard(),
+                    )
+                sent_panel = True
+            else:
+                logger.warning("Start panel video not found. Checked START_PANEL_VIDEO_PATH + asset/assest fallbacks.")
+        except Exception as e:
+            logger.warning(f"Could not send start panel video via local file: {e}")
 
     # Dynamic start image with optional Telegram profile photo bubble.
     profile_url: Optional[str] = None
@@ -5582,6 +5639,74 @@ async def chatid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await update.effective_message.reply_text("\n".join(lines))
 
 
+async def getfileid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Return Telegram file_id/file_unique_id from a replied media message (owner only)."""
+    await _register_user_from_update(update)
+
+    if not update.effective_user or update.effective_user.id != ADMIN_ID:
+        await update.effective_message.reply_text("Only owner can use this command.")
+        return
+
+    if update.effective_chat and update.effective_chat.type != ChatType.PRIVATE:
+        await update.effective_message.reply_text("Use this command in private chat only.")
+        return
+
+    reply = update.effective_message.reply_to_message if update.effective_message else None
+    if not reply:
+        await update.effective_message.reply_text(
+            "Reply to a media message with /getfileid\n\nSupported: video, photo, animation, document, audio, voice, sticker, video_note."
+        )
+        return
+
+    file_id: Optional[str] = None
+    unique_id: Optional[str] = None
+    media_kind = "unknown"
+
+    if reply.video:
+        file_id = reply.video.file_id
+        unique_id = reply.video.file_unique_id
+        media_kind = "video"
+    elif reply.photo:
+        file_id = reply.photo[-1].file_id
+        unique_id = reply.photo[-1].file_unique_id
+        media_kind = "photo"
+    elif reply.animation:
+        file_id = reply.animation.file_id
+        unique_id = reply.animation.file_unique_id
+        media_kind = "animation"
+    elif reply.document:
+        file_id = reply.document.file_id
+        unique_id = reply.document.file_unique_id
+        media_kind = "document"
+    elif reply.audio:
+        file_id = reply.audio.file_id
+        unique_id = reply.audio.file_unique_id
+        media_kind = "audio"
+    elif reply.voice:
+        file_id = reply.voice.file_id
+        unique_id = reply.voice.file_unique_id
+        media_kind = "voice"
+    elif reply.sticker:
+        file_id = reply.sticker.file_id
+        unique_id = reply.sticker.file_unique_id
+        media_kind = "sticker"
+    elif reply.video_note:
+        file_id = reply.video_note.file_id
+        unique_id = reply.video_note.file_unique_id
+        media_kind = "video_note"
+
+    if not file_id:
+        await update.effective_message.reply_text("No supported media found in replied message.")
+        return
+
+    await update.effective_message.reply_text(
+        f"Media: {media_kind}\n"
+        f"file_id:\n`{file_id}`\n\n"
+        f"file_unique_id:\n`{unique_id or 'N/A'}`\n\n"
+        "For start panel video, set:\n"
+        f"`START_PANEL_VIDEO_FILE_ID={file_id}`",
+        parse_mode=ParseMode.MARKDOWN,
+    )
 
 async def channelstats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send past/present usage summary to the log channel and caller."""
@@ -6408,6 +6533,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(
             HELP_TEXT,
+            reply_markup=reply_markup,
+        )
+
+    elif query.data == "info":
+        keyboard = [[InlineKeyboardButton("\U0001F3E0 Back to Start", callback_data="start")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            "Bot Info\n\n"
+            "Music Engine: yt-dlp + VC assistant\n"
+            "Voice Chat: PyTgCalls 2.1.0\n"
+            "Runtime: Railway optimized\n"
+            "Use /play in group for VC streaming.",
             reply_markup=reply_markup,
         )
 
@@ -7426,6 +7563,7 @@ def main() -> None:
     application.add_handler(CommandHandler("styledebug", styledebug_command))
     application.add_handler(CommandHandler("buildinfo", buildinfo_command))
     application.add_handler(CommandHandler("chatid", chatid_command))
+    application.add_handler(CommandHandler("getfileid", getfileid_command))
     
     # Song download commands
     application.add_handler(CommandHandler("play", play_command))
@@ -7645,6 +7783,9 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
 
 
 
