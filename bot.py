@@ -45,6 +45,8 @@ from database import BotDatabase
 from vc_manager import VCManager
 from music_handlers import MusicHandlers
 from ui_start import premium_start_caption, premium_start_buttons
+from start_card import create_start_card
+from nickname_memory import get_user_nickname, set_user_nickname
 
 # Keep all persistent files tied to this script directory so deploy/run cwd changes do not reset state.
 BASE_DIR: Final[Path] = Path(__file__).resolve().parent
@@ -85,6 +87,7 @@ ASSISTANT_SESSION: Final[str] = os.getenv("ASSISTANT_SESSION", "")
 START_STICKER_FILE_ID: Final[str] = os.getenv("START_STICKER_FILE_ID", "")
 START_PANEL_PHOTO_FILE_ID: Final[str] = os.getenv("START_PANEL_PHOTO_FILE_ID", "").strip()
 START_PANEL_PHOTO_URL: Final[str] = os.getenv("START_PANEL_PHOTO_URL", "").strip()
+START_BANNER_PATH: Final[str] = os.getenv("START_BANNER_PATH", "banner.jpg").strip()
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable not set!")
@@ -1240,6 +1243,7 @@ HELP_TEXT: Final[str] = (
     "\U0001F496 Baby Help Guide\n\n"
     "\U0001F680 Basic Commands\n"
     "/start - Open start menu\n"
+    "/setnick <name> - Save your nickname\n"
     "/help - Open this help guide\n"
     "/chatid - Show chat/user IDs\n"
     "/vcguide - Voice chat setup guide\n\n"
@@ -2346,11 +2350,35 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         ),
     )
 
-    first_name = html.escape(update.effective_user.first_name or "Music Lover")
-    caption = premium_start_caption(first_name)
+    raw_name = update.effective_user.first_name or "Music Lover"
+    nickname = get_user_nickname(user_id, raw_name)
+    safe_name = html.escape(nickname)
+    caption = premium_start_caption(safe_name)
     sent_panel = False
 
-    if START_PANEL_PHOTO_FILE_ID:
+    # Dynamic start image with optional Telegram profile photo bubble.
+    profile_url: Optional[str] = None
+    try:
+        photos = await context.bot.get_user_profile_photos(user_id, limit=1)
+        if photos and photos.total_count > 0:
+            file_obj = await context.bot.get_file(photos.photos[0][-1].file_id)
+            profile_url = getattr(file_obj, "file_path", None)
+    except Exception as e:
+        logger.info(f"Could not fetch profile photo for start card: {e}")
+
+    try:
+        card = create_start_card(START_BANNER_PATH, nickname, profile_url)
+        await update.effective_message.reply_photo(
+            photo=card,
+            caption=caption,
+            parse_mode=ParseMode.HTML,
+            reply_markup=_build_start_keyboard(),
+        )
+        sent_panel = True
+    except Exception as e:
+        logger.warning(f"Could not render/send dynamic start card: {e}")
+
+    if not sent_panel and START_PANEL_PHOTO_FILE_ID:
         try:
             await update.effective_message.reply_photo(
                 photo=START_PANEL_PHOTO_FILE_ID,
@@ -2398,6 +2426,22 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         HELP_TEXT,
         reply_markup=reply_markup,
     )
+
+
+async def setnick_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set nickname used on dynamic /start card."""
+    await _register_user_from_update(update)
+    if not update.effective_user:
+        return
+    if not context.args:
+        await update.effective_message.reply_text("Usage: /setnick <your nickname>")
+        return
+    nickname = " ".join(context.args).strip()[:40]
+    if not nickname:
+        await update.effective_message.reply_text("Nickname empty nahi ho sakta.")
+        return
+    set_user_nickname(update.effective_user.id, nickname)
+    await update.effective_message.reply_text(f"Nickname saved: {nickname}")
 
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -7206,6 +7250,7 @@ def _default_bot_commands() -> list[BotCommand]:
     """Default command menu pushed to Telegram on startup."""
     return [
         BotCommand("start", "Open start menu"),
+        BotCommand("setnick", "Set your nickname for start card"),
         BotCommand("help", "Open help guide"),
         BotCommand("play", "VC in group / file in private"),
         BotCommand("queue", "Show voice queue (group)"),
@@ -7363,6 +7408,7 @@ def main() -> None:
     
     # Register command handlers
     application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("setnick", setnick_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("admin", admin_command))
     application.add_handler(CommandHandler("adminhelp", admin_command))
