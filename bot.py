@@ -21,7 +21,10 @@ from typing import Final, Dict, List, Tuple, Optional, Set, Any
 random.seed()
 
 import httpx
-from google import genai
+try:
+    from google import genai
+except Exception:
+    genai = None
 from telegram import Bot, BotCommand, CallbackQuery, Message, Update, InlineKeyboardButton, InlineKeyboardMarkup, Chat, ChatPermissions
 from telegram.constants import ChatType, ParseMode, ChatMemberStatus
 from telegram.request import HTTPXRequest
@@ -103,11 +106,8 @@ if not OPENROUTER_API_KEY:
         "OPENROUTER_API_KEY environment variable not set! This is required for the bot to function."
     )
 
-# Gemini is no longer used - using OpenRouter only
-# GEMINI_CLIENT: Optional[genai.Client] = None
-# if GEMINI_API_KEY:
-#     GEMINI_CLIENT = genai.Client(api_key=GEMINI_API_KEY)
-GEMINI_CLIENT: Optional[genai.Client] = None
+# Gemini is optional; keep disabled by default.
+GEMINI_CLIENT: Optional[Any] = None
 
 # Model fallback order (most stable first)
 GEMINI_MODELS: Final[list[str]] = [
