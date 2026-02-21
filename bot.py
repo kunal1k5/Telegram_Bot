@@ -83,6 +83,8 @@ VC_API_ID: Final[int] = int(os.getenv("VC_API_ID", str(API_ID)))
 VC_API_HASH: Final[str] = os.getenv("VC_API_HASH", API_HASH)
 ASSISTANT_SESSION: Final[str] = os.getenv("ASSISTANT_SESSION", "")
 START_STICKER_FILE_ID: Final[str] = os.getenv("START_STICKER_FILE_ID", "")
+START_PANEL_PHOTO_FILE_ID: Final[str] = os.getenv("START_PANEL_PHOTO_FILE_ID", "").strip()
+START_PANEL_PHOTO_URL: Final[str] = os.getenv("START_PANEL_PHOTO_URL", "").strip()
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable not set!")
@@ -2341,11 +2343,39 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
     first_name = html.escape(update.effective_user.first_name or "Music Lover")
-    await update.effective_message.reply_text(
-        premium_start_caption(first_name),
-        parse_mode=ParseMode.HTML,
-        reply_markup=_build_start_keyboard(),
-    )
+    caption = premium_start_caption(first_name)
+    sent_panel = False
+
+    if START_PANEL_PHOTO_FILE_ID:
+        try:
+            await update.effective_message.reply_photo(
+                photo=START_PANEL_PHOTO_FILE_ID,
+                caption=caption,
+                parse_mode=ParseMode.HTML,
+                reply_markup=_build_start_keyboard(),
+            )
+            sent_panel = True
+        except Exception as e:
+            logger.warning(f"Could not send start panel via photo file_id: {e}")
+
+    if not sent_panel and START_PANEL_PHOTO_URL:
+        try:
+            await update.effective_message.reply_photo(
+                photo=START_PANEL_PHOTO_URL,
+                caption=caption,
+                parse_mode=ParseMode.HTML,
+                reply_markup=_build_start_keyboard(),
+            )
+            sent_panel = True
+        except Exception as e:
+            logger.warning(f"Could not send start panel via photo url: {e}")
+
+    if not sent_panel:
+        await update.effective_message.reply_text(
+            caption,
+            parse_mode=ParseMode.HTML,
+            reply_markup=_build_start_keyboard(),
+        )
     if START_STICKER_FILE_ID:
         try:
             await update.effective_message.reply_sticker(START_STICKER_FILE_ID)
