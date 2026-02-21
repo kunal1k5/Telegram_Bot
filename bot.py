@@ -44,6 +44,7 @@ except ImportError:
 from database import BotDatabase
 from vc_manager import VCManager
 from music_handlers import MusicHandlers
+from ui_start import premium_start_caption, premium_start_buttons
 
 # Keep all persistent files tied to this script directory so deploy/run cwd changes do not reset state.
 BASE_DIR: Final[Path] = Path(__file__).resolve().parent
@@ -2304,23 +2305,8 @@ async def my_chat_member_handler(update: Update, context: ContextTypes.DEFAULT_T
         logger.error(f"Error in my_chat_member_handler: {e}")
 
 def _build_start_keyboard() -> InlineKeyboardMarkup:
-    keyboard = [
-        [
-            InlineKeyboardButton("\U0001F4AC Chat With Me", callback_data="chat"),
-            InlineKeyboardButton("\u2795 Add To Group", url=f"https://t.me/{BOT_USERNAME[1:]}?startgroup=true"),
-        ],
-        [
-            InlineKeyboardButton("\U0001F4D8 Help", callback_data="help"),
-            InlineKeyboardButton("\U0001F399\uFE0F VC Guide", callback_data="vc_guide"),
-        ],
-        [
-            InlineKeyboardButton("\U0001F4E2 Channel", url=f"https://t.me/{CHANNEL_USERNAME[1:]}"),
-            InlineKeyboardButton("\u2699\uFE0F Group Settings", callback_data="show_settings_info"),
-        ],
-        [
-            InlineKeyboardButton("\U0001F4DE Contact / Promotion", url=f"https://t.me/{CONTACT_USERNAME[1:]}"),
-        ],
-    ]
+    keyboard = premium_start_buttons(BOT_USERNAME, CHANNEL_USERNAME).inline_keyboard
+    keyboard.append([InlineKeyboardButton("Contact / Promotion", url=f"https://t.me/{CONTACT_USERNAME[1:]}")])
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -2354,9 +2340,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         ),
     )
 
+    first_name = html.escape(update.effective_user.first_name or "Music Lover")
     await update.effective_message.reply_text(
-        START_TEXT,
-        parse_mode=ParseMode.MARKDOWN,
+        premium_start_caption(first_name),
+        parse_mode=ParseMode.HTML,
         reply_markup=_build_start_keyboard(),
     )
     if START_STICKER_FILE_ID:
@@ -6346,7 +6333,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             reply_markup=reply_markup,
         )
 
-    elif query.data == "vc_guide":
+    elif query.data in {"vc_guide", "vcguide"}:
         keyboard = [[InlineKeyboardButton("\U0001F3E0 Back to Start", callback_data="start")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(
@@ -6362,13 +6349,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
 
     elif query.data == "start":
+        first_name = html.escape(query.from_user.first_name or "Music Lover")
         await query.edit_message_text(
-            START_TEXT,
-            parse_mode=ParseMode.MARKDOWN,
+            premium_start_caption(first_name),
+            parse_mode=ParseMode.HTML,
             reply_markup=_build_start_keyboard(),
         )
 
-    elif query.data == "show_settings_info":
+    elif query.data in {"show_settings_info", "settings"}:
         user_groups = []
         for group_id, group_data in GROUPS_DATABASE.items():
             if group_id < 0:
