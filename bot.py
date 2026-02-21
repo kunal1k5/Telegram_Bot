@@ -45,7 +45,7 @@ from database import BotDatabase
 from vc_manager import VCManager
 from music_handlers import MusicHandlers
 from ui_start import premium_start_caption, premium_start_buttons
-from start_card import create_dynamic_start_card
+from start_card import create_start_card
 from nickname_memory import get_user_nickname, set_user_nickname
 
 # Keep all persistent files tied to this script directory so deploy/run cwd changes do not reset state.
@@ -2380,6 +2380,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     raw_name = update.effective_user.first_name or "Music Lover"
     nickname = get_user_nickname(user_id, raw_name)
+    safe_name = html.escape(nickname)
+    caption = premium_start_caption(safe_name)
 
     sent_panel = False
 
@@ -2394,9 +2396,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.info(f"Could not fetch profile photo for start card: {e}")
 
     try:
-        card = create_dynamic_start_card(nickname, profile_url)
+        card = create_start_card(START_BANNER_PATH, nickname, profile_url)
         await update.effective_message.reply_photo(
             photo=card,
+            caption=caption,
+            parse_mode=ParseMode.HTML,
             reply_markup=_build_start_keyboard(),
         )
         sent_panel = True
@@ -2405,7 +2409,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     if not sent_panel:
         await update.effective_message.reply_text(
-            "Start panel image is not available right now.",
+            caption,
+            parse_mode=ParseMode.HTML,
             reply_markup=_build_start_keyboard(),
         )
     if START_STICKER_FILE_ID:
