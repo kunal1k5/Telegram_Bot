@@ -47,7 +47,7 @@ def premium_start_buttons(
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("💬 Chat With Me", url=f"https://t.me/{bot_name}"),
+                InlineKeyboardButton("💬 Chat With Me", callback_data="chat"),
                 InlineKeyboardButton("➕ Add To Group", url=f"https://t.me/{bot_name}?startgroup=true"),
             ],
             [

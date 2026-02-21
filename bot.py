@@ -6461,6 +6461,26 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     """Handle inline button callbacks"""
     query = update.callback_query
 
+    async def _safe_edit_or_reply(
+        text: str,
+        *,
+        reply_markup: Optional[InlineKeyboardMarkup] = None,
+        parse_mode: Optional[str] = None,
+    ) -> None:
+        try:
+            await query.edit_message_text(
+                text,
+                parse_mode=parse_mode,
+                reply_markup=reply_markup,
+            )
+        except Exception:
+            if query.message:
+                await query.message.reply_text(
+                    text,
+                    parse_mode=parse_mode,
+                    reply_markup=reply_markup,
+                )
+
     if await MUSIC_HANDLERS.handle_vc_callback(query, _get_vc_manager):
         return
 
@@ -6469,7 +6489,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if query.data == "chat":
-        await query.edit_message_text(
+        await _safe_edit_or_reply(
             "\u2728 Let us start!\n\n"
             "Ask me anything, share your day, or just chat.\n\n"
             "I am here for you \U0001F496",
@@ -6479,7 +6499,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif query.data == "help":
         keyboard = [[InlineKeyboardButton("\U0001F3E0 Back to Start", callback_data="start")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(
+        await _safe_edit_or_reply(
             HELP_TEXT,
             reply_markup=reply_markup,
         )
@@ -6487,7 +6507,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif query.data == "info":
         keyboard = [[InlineKeyboardButton("\U0001F3E0 Back to Start", callback_data="start")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(
+        await _safe_edit_or_reply(
             "Bot Info\n\n"
             "Music Engine: yt-dlp + VC assistant\n"
             "Voice Chat: PyTgCalls 2.1.0\n"
@@ -6499,7 +6519,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif query.data in {"vc_guide", "vcguide"}:
         keyboard = [[InlineKeyboardButton("\U0001F3E0 Back to Start", callback_data="start")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(
+        await _safe_edit_or_reply(
             "\U0001F399\uFE0F Voice Chat Play Guide\n\n"
             "1. Add bot + assistant account in group.\n"
             "2. Give both admin rights (voice chat permissions).\n"
@@ -6518,14 +6538,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             [InlineKeyboardButton("\U0001F3E0 Back to Start", callback_data="start")],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(
+        await _safe_edit_or_reply(
             "Choose contact option:",
             reply_markup=reply_markup,
         )
 
     elif query.data == "start":
         first_name = html.escape(query.from_user.first_name or "Music Lover")
-        await query.edit_message_text(
+        await _safe_edit_or_reply(
             premium_start_caption(first_name),
             parse_mode=ParseMode.HTML,
             reply_markup=_build_start_keyboard(),
@@ -6540,7 +6560,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not user_groups:
             keyboard = [[InlineKeyboardButton("\U0001F3E0 Back to Start", callback_data="start")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text(
+            await _safe_edit_or_reply(
                 "*Group Settings*\n\n"
                 "I am not in any group yet.\n\n"
                 "How to add me:\n"
@@ -6559,7 +6579,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 keyboard.append([InlineKeyboardButton(f"\u2699\uFE0F {group_title}", callback_data=f"groupsetting_{group_id}")])
             keyboard.append([InlineKeyboardButton("\U0001F3E0 Back to Start", callback_data="start")])
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text(
+            await _safe_edit_or_reply(
                 "*Group Settings*\n\n"
                 "Select your group to manage settings.\n\n"
                 "Open that group and run /settings (admin only).",
@@ -6574,7 +6594,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         keyboard = [[InlineKeyboardButton("\U0001F519 Back to Groups", callback_data="show_settings_info")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await query.edit_message_text(
+        await _safe_edit_or_reply(
             f"*Settings for {group_name}*\n\n"
             "Group settings can only be changed inside that group.\n\n"
             "Steps:\n"
