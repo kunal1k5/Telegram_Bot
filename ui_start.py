@@ -21,11 +21,13 @@ def premium_start_caption(user_name: str = "Music Lover") -> str:
     safe_name = (user_name or "Music Lover").strip()
     return (
         f"✨ <b>HEY BABY {safe_name}</b> NICE TO MEET YOU 🌹\n\n"
-        "◎ THIS IS <b>『ANIMX MUSIC』</b>\n\n"
+        "◎ <b>THIS IS 『ANIMX MUSIC』</b>\n\n"
         "➤ A premium designed music player bot for Telegram groups & channels.\n\n"
+        "━━━━━━━━━━━━━━━━━━\n"
         "🎧 HD Voice Chat Streaming\n"
         "🚀 Fast • Smart • Always Active\n"
-        "💬 Chat Naturally Like a Friend\n\n"
+        "💬 Chat Naturally Like a Friend\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
         f"{greeting} 💖"
     )
 
@@ -35,22 +37,29 @@ def premium_start_buttons(
     channel_username: str,
     support_url: str = "https://t.me",
     source_url: str = "https://github.com",
+    contact_url: str = "https://t.me",
 ) -> InlineKeyboardMarkup:
     _ = channel_username
+    _ = support_url
+    _ = source_url
+    _ = contact_url
     bot_name = bot_username.lstrip("@")
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton(
-                    "◎ ADD ME TO YOUR CHAT ◎",
-                    url=f"https://t.me/{bot_name}?startgroup=true",
-                )
+                InlineKeyboardButton("💬 Chat With Me", url=f"https://t.me/{bot_name}"),
+                InlineKeyboardButton("➕ Add To Group", url=f"https://t.me/{bot_name}?startgroup=true"),
             ],
-            [InlineKeyboardButton("HELP AND COMMANDS", callback_data="help")],
             [
-                InlineKeyboardButton("SUPPORT", url=support_url),
-                InlineKeyboardButton("SOURCE", url=source_url),
+                InlineKeyboardButton("📖 Help", callback_data="help"),
+                InlineKeyboardButton("🎙 VC Guide", callback_data="vc_guide"),
             ],
-            [InlineKeyboardButton("• BOT | YT-API INFO •", callback_data="info")],
+            [
+                InlineKeyboardButton("📢 Channel", url="https://t.me/AnimxClan_Channel"),
+                InlineKeyboardButton("⚙ Settings", callback_data="settings"),
+            ],
+            [
+                InlineKeyboardButton("📩 Contact / Promotion", callback_data="contact_promo"),
+            ],
         ]
     )

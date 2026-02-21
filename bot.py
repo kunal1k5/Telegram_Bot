@@ -2326,6 +2326,7 @@ def _build_start_keyboard() -> InlineKeyboardMarkup:
         CHANNEL_USERNAME,
         support_url=START_SUPPORT_URL,
         source_url=START_SOURCE_URL,
+        contact_url=f"https://t.me/{CONTACT_USERNAME.lstrip('@')}",
     )
 
 
@@ -2377,37 +2378,39 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         ),
     )
 
+    raw_name = update.effective_user.first_name or "Music Lover"
+    nickname = get_user_nickname(user_id, raw_name)
+    safe_name = html.escape(nickname)
+    caption = premium_start_caption(safe_name)
+
     sent_panel = False
 
-    # Video-only start panel (file_id or local path).
-    if START_PANEL_VIDEO_FILE_ID:
-        try:
-            await update.effective_message.reply_video(
-                video=START_PANEL_VIDEO_FILE_ID,
-                reply_markup=_build_start_keyboard(),
-            )
-            sent_panel = True
-        except Exception as e:
-            logger.warning(f"Could not send start panel video via file_id: {e}")
+    # Image-only dynamic start panel with user's Telegram DP bubble.
+    profile_url: Optional[str] = None
+    try:
+        photos = await context.bot.get_user_profile_photos(user_id, limit=1)
+        if photos and photos.total_count > 0:
+            file_obj = await context.bot.get_file(photos.photos[0][-1].file_id)
+            profile_url = getattr(file_obj, "file_path", None)
+    except Exception as e:
+        logger.info(f"Could not fetch profile photo for start card: {e}")
 
-    if not sent_panel:
-        try:
-            video_path = _resolve_start_panel_video_path()
-            if video_path:
-                with open(video_path, "rb") as vf:
-                    await update.effective_message.reply_video(
-                        video=vf,
-                        reply_markup=_build_start_keyboard(),
-                    )
-                sent_panel = True
-            else:
-                logger.warning("Start panel video not found. Checked START_PANEL_VIDEO_PATH + asset/assest fallbacks.")
-        except Exception as e:
-            logger.warning(f"Could not send start panel video via local file: {e}")
+    try:
+        card = create_start_card(START_BANNER_PATH, nickname, profile_url)
+        await update.effective_message.reply_photo(
+            photo=card,
+            caption=caption,
+            parse_mode=ParseMode.HTML,
+            reply_markup=_build_start_keyboard(),
+        )
+        sent_panel = True
+    except Exception as e:
+        logger.warning(f"Could not render/send dynamic start card: {e}")
 
     if not sent_panel:
         await update.effective_message.reply_text(
-            "Start panel video is not available right now.",
+            caption,
+            parse_mode=ParseMode.HTML,
             reply_markup=_build_start_keyboard(),
         )
     if START_STICKER_FILE_ID:
@@ -6505,6 +6508,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "5. Start group voice chat and use /play <song name>.\n\n"
             "Controls: /queue, /skip, /stop\n"
             "Tip: /play <song> in group also starts VC play \u2705",
+            reply_markup=reply_markup,
+        )
+
+    elif query.data == "contact_promo":
+        keyboard = [
+            [InlineKeyboardButton("First Co-Owner", url="https://t.me/Joy_boy_dady")],
+            [InlineKeyboardButton("Second Co-Owner", url="https://t.me/Xebechu")],
+            [InlineKeyboardButton("\U0001F3E0 Back to Start", callback_data="start")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            "Choose contact option:",
             reply_markup=reply_markup,
         )
 
