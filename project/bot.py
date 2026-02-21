@@ -1,3 +1,4 @@
+import asyncio
 import os
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -50,7 +51,7 @@ async def _is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
 
 def _launch_join_lobby(chat_id: int, join_time: int, context: ContextTypes.DEFAULT_TYPE) -> None:
     create_game(chat_id, join_time=join_time)
-    task = context.application.create_task(start_join_timer(chat_id, context))
+    task = asyncio.create_task(start_join_timer(chat_id, context))
     active_games[chat_id]["join_task"] = task
 
 

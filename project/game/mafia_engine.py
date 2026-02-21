@@ -22,6 +22,20 @@ async def dramatic_send(chat_id: int, text: str, context) -> None:
     await context.bot.send_message(chat_id, text)
 
 
+def _cleanup_game(chat_id: int) -> None:
+    game = active_games.get(chat_id)
+    if not game:
+        return
+
+    join_task = game.get("join_task")
+    if join_task:
+        join_task.cancel()
+
+    for player_id in game.get("players", []):
+        player_game_map.pop(player_id, None)
+    active_games.pop(chat_id, None)
+
+
 def create_game(chat_id: int, join_time: int = DEFAULT_JOIN_TIME) -> None:
     old_game = active_games.get(chat_id)
     if old_game and old_game.get("join_task"):
@@ -96,7 +110,7 @@ async def start_join_timer(chat_id: int, context) -> None:
         await start_game(chat_id, context)
     else:
         await context.bot.send_message(chat_id, "❌ Not enough players. Game cancelled.")
-        active_games.pop(chat_id, None)
+        _cleanup_game(chat_id)
 
 
 def join_game(chat_id: int, user_id: int) -> tuple[bool, str]:
@@ -372,12 +386,14 @@ def check_win(chat_id: int):
         for p in villagers_alive:
             add(p, 20)
             add_win(p)
+        _cleanup_game(chat_id)
         return "Villagers Win!"
 
     if len(mafia_alive) >= len(villagers_alive):
         for p in mafia_alive:
             add(p, 25)
             add_win(p)
+        _cleanup_game(chat_id)
         return "Mafia Wins!"
 
     return None
