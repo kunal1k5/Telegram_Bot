@@ -34,13 +34,15 @@ CONTACT_USERNAME = os.getenv("CONTACT_USERNAME", "YOUR_CONTACT").strip("@")
 
 def start_panel_text(user_name: str) -> str:
     return (
-        f"HEY {user_name}, WELCOME!\n\n"
-        "THIS IS ANIMX GAME + CHAT BOT.\n\n"
-        "What you can do:\n"
-        "- Play multiplayer Mafia\n"
-        "- Use chat-style quick interactions\n"
-        "- Buy game items and track rank\n\n"
-        "Open Help to see all commands."
+        f"✨ HEY BABY {user_name} NICE TO MEET YOU 🌹\n\n"
+        "◎ THIS IS 『ANIMX GAME』\n\n"
+        "➤ A premium designed game + chat bot for Telegram groups & channels.\n\n"
+        "────────────────────────\n"
+        "🎮 Multiplayer Mafia Battles\n"
+        "🚀 Fast • Smart • Always Active\n"
+        "💬 Chat Naturally Like a Friend\n"
+        "────────────────────────\n\n"
+        "🌙 Good Evening 💖"
     )
 
 
