@@ -2377,19 +2377,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         ),
     )
 
-    raw_name = update.effective_user.first_name or "Music Lover"
-    nickname = get_user_nickname(user_id, raw_name)
-    safe_name = html.escape(nickname)
-    caption = premium_start_caption(safe_name)
     sent_panel = False
 
-    # Video-first premium start panel (file_id or local path), then fallback to image/text panel.
+    # Video-only start panel (file_id or local path).
     if START_PANEL_VIDEO_FILE_ID:
         try:
             await update.effective_message.reply_video(
                 video=START_PANEL_VIDEO_FILE_ID,
-                caption=caption,
-                parse_mode=ParseMode.HTML,
                 reply_markup=_build_start_keyboard(),
             )
             sent_panel = True
@@ -2403,8 +2397,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 with open(video_path, "rb") as vf:
                     await update.effective_message.reply_video(
                         video=vf,
-                        caption=caption,
-                        parse_mode=ParseMode.HTML,
                         reply_markup=_build_start_keyboard(),
                     )
                 sent_panel = True
@@ -2413,56 +2405,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         except Exception as e:
             logger.warning(f"Could not send start panel video via local file: {e}")
 
-    # Dynamic start image with optional Telegram profile photo bubble.
-    profile_url: Optional[str] = None
-    try:
-        photos = await context.bot.get_user_profile_photos(user_id, limit=1)
-        if photos and photos.total_count > 0:
-            file_obj = await context.bot.get_file(photos.photos[0][-1].file_id)
-            profile_url = getattr(file_obj, "file_path", None)
-    except Exception as e:
-        logger.info(f"Could not fetch profile photo for start card: {e}")
-
-    try:
-        card = create_start_card(START_BANNER_PATH, nickname, profile_url)
-        await update.effective_message.reply_photo(
-            photo=card,
-            caption=caption,
-            parse_mode=ParseMode.HTML,
-            reply_markup=_build_start_keyboard(),
-        )
-        sent_panel = True
-    except Exception as e:
-        logger.warning(f"Could not render/send dynamic start card: {e}")
-
-    if not sent_panel and START_PANEL_PHOTO_FILE_ID:
-        try:
-            await update.effective_message.reply_photo(
-                photo=START_PANEL_PHOTO_FILE_ID,
-                caption=caption,
-                parse_mode=ParseMode.HTML,
-                reply_markup=_build_start_keyboard(),
-            )
-            sent_panel = True
-        except Exception as e:
-            logger.warning(f"Could not send start panel via photo file_id: {e}")
-
-    if not sent_panel and START_PANEL_PHOTO_URL:
-        try:
-            await update.effective_message.reply_photo(
-                photo=START_PANEL_PHOTO_URL,
-                caption=caption,
-                parse_mode=ParseMode.HTML,
-                reply_markup=_build_start_keyboard(),
-            )
-            sent_panel = True
-        except Exception as e:
-            logger.warning(f"Could not send start panel via photo url: {e}")
-
     if not sent_panel:
         await update.effective_message.reply_text(
-            caption,
-            parse_mode=ParseMode.HTML,
+            "Start panel video is not available right now.",
             reply_markup=_build_start_keyboard(),
         )
     if START_STICKER_FILE_ID:
