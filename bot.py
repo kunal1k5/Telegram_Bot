@@ -47,14 +47,22 @@ from music_handlers import MusicHandlers
 
 # Keep all persistent files tied to this script directory so deploy/run cwd changes do not reset state.
 BASE_DIR: Final[Path] = Path(__file__).resolve().parent
+DATA_DIR: Final[Path] = Path(os.getenv("DATA_DIR", str(BASE_DIR))).expanduser()
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _resolve_data_file(filename: str) -> Path:
-    target = BASE_DIR / filename
+    target = DATA_DIR / filename
     legacy = Path(filename)
     try:
         if not target.exists() and legacy.exists() and legacy.resolve() != target.resolve():
             shutil.copy2(legacy, target)
+    except Exception:
+        pass
+    try:
+        script_local = BASE_DIR / filename
+        if not target.exists() and script_local.exists() and script_local.resolve() != target.resolve():
+            shutil.copy2(script_local, target)
     except Exception:
         pass
     return target
@@ -100,6 +108,7 @@ GEMINI_MODEL_CACHE: list[str] = []
 BOT_NAME: Final[str] = "ANIMX CLAN"
 BOT_USERNAME: Final[str] = "@AnimxClanBot"
 OWNER_USERNAME: Final[str] = "@kunal1k5"
+CONTACT_USERNAME: Final[str] = "@Joy_boy_dady"
 CHANNEL_USERNAME: Final[str] = "@AnimxClan_Channel"
 LOG_CHANNEL_USERNAME: Final[str] = os.getenv("LOG_CHANNEL_USERNAME", CHANNEL_USERNAME)
 LOG_CHANNEL_ID: Final[int] = int(os.getenv("LOG_CHANNEL_ID", "0"))
@@ -321,6 +330,43 @@ def _save_manual_broadcast_targets(user_ids: Set[int], group_ids: Set[int]) -> N
 
 
 MANUAL_BROADCAST_USERS, MANUAL_BROADCAST_GROUPS = _load_manual_broadcast_targets()
+
+
+DM_ELIGIBLE_FILE: Final[Path] = _resolve_data_file("dm_eligible_users.json")
+
+
+def _load_dm_eligible_users() -> Set[int]:
+    try:
+        if DM_ELIGIBLE_FILE.exists():
+            with open(DM_ELIGIBLE_FILE, "r") as f:
+                data = json.load(f)
+            return {int(v) for v in data.get("user_ids", []) if int(v) > 0}
+    except Exception as e:
+        logger.warning(f"Could not load dm eligible users: {e}")
+    return set()
+
+
+def _save_dm_eligible_users(user_ids: Set[int]) -> None:
+    try:
+        with open(DM_ELIGIBLE_FILE, "w") as f:
+            json.dump({"user_ids": sorted(int(v) for v in user_ids), "total": len(user_ids)}, f, indent=2)
+    except Exception as e:
+        logger.error(f"Could not save dm eligible users: {e}")
+
+
+DM_ELIGIBLE_USERS: Set[int] = _load_dm_eligible_users()
+
+
+def _mark_user_dm_eligible(user_id: int) -> None:
+    if user_id > 0 and user_id not in DM_ELIGIBLE_USERS:
+        DM_ELIGIBLE_USERS.add(user_id)
+        _save_dm_eligible_users(DM_ELIGIBLE_USERS)
+
+
+def _mark_user_dm_ineligible(user_id: int) -> None:
+    if user_id in DM_ELIGIBLE_USERS:
+        DM_ELIGIBLE_USERS.discard(user_id)
+        _save_dm_eligible_users(DM_ELIGIBLE_USERS)
 
 
 def _get_broadcast_targets() -> Tuple[Set[int], Set[int]]:
@@ -1196,10 +1242,9 @@ HELP_TEXT: Final[str] = (
     "/song <name> - Search and send a song\n"
     "/download <name> - Same as /song\n"
     "/yt <link> - Download from a YouTube link\n"
-    "/vplay <name/url> - Play in group voice chat\n"
-    "/vqueue - Show voice queue\n"
-    "/vskip - Skip current VC song\n"
-    "/vstop - Stop VC and clear queue\n\n"
+    "/queue - Show voice queue\n"
+    "/skip - Skip current VC song\n"
+    "/stop - In groups: stop VC, in private: stop broadcasts\n\n"
     "\U0001F46E Group Admin Commands\n"
     "/all <message> - Mention active users\n"
     "@all <message> - Quick mention\n"
@@ -1223,7 +1268,7 @@ HELP_TEXT: Final[str] = (
     "/groups - List groups\n\n"
     "\u2699\uFE0F Voice Chat Notes\n"
     "- In private chat, music commands send audio files.\n"
-    "- In groups, use /vplay for live voice chat playback.\n"
+    "- In groups, use /play for live voice chat playback.\n"
     "- If VC does not start, run /vcguide.\n\n"
     "\U0001F9E0 AI Quick Tools (chat trigger)\n"
     "- `translate <text>`\n"
@@ -2272,6 +2317,9 @@ def _build_start_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("\U0001F4E2 Channel", url=f"https://t.me/{CHANNEL_USERNAME[1:]}"),
             InlineKeyboardButton("\u2699\uFE0F Group Settings", callback_data="show_settings_info"),
         ],
+        [
+            InlineKeyboardButton("\U0001F4DE Contact / Promotion", url=f"https://t.me/{CONTACT_USERNAME[1:]}"),
+        ],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -2281,6 +2329,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await _register_user_from_update(update)
 
     user_id = update.effective_user.id
+    if update.effective_chat and update.effective_chat.type == ChatType.PRIVATE:
+        _mark_user_dm_eligible(user_id)
+
     if user_id in OPTED_OUT_USERS:
         OPTED_OUT_USERS.discard(user_id)
         _save_opted_out_users(OPTED_OUT_USERS)
@@ -2329,14 +2380,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /stop command - Opt out of broadcasts"""
+    """Handle /stop command - group: stop VC, private: opt out of broadcasts."""
     user_id = update.effective_user.id
-    
-    # Only works in private chat
-    if update.effective_chat.type != ChatType.PRIVATE:
-        await update.effective_message.reply_text(
-            " Ye command sirf private chat mein use kar sakte ho."
-        )
+
+    # In groups, /stop is treated as VC stop.
+    if update.effective_chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        await vstop_command(update, context)
         return
     
     # Check if already opted out
@@ -2489,16 +2538,22 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     broadcast_message = " ".join(context.args)
     
     active_users, all_groups = _get_broadcast_targets()
+    # DM can be sent only to users who have opened private chat at least once.
+    active_users = {
+        uid for uid in active_users
+        if uid in DM_ELIGIBLE_USERS or uid in MANUAL_BROADCAST_USERS
+    }
     
     # Send confirmation with user and group count
     total_users = len(active_users)
     total_groups = len(all_groups)
     opted_out_count = len(OPTED_OUT_USERS)
+    dm_eligible_count = len(DM_ELIGIBLE_USERS)
     total_recipients = total_users + total_groups
     
     confirm_msg = await update.effective_message.reply_text(
         f" Broadcasting to {total_users} users + {total_groups} groups...\n"
-        f"({opted_out_count} users opted out)\n\n"
+        f"({opted_out_count} users opted out, {dm_eligible_count} DM-eligible)\n\n"
         f"Message: \"{broadcast_message}\"\n\n"
         f"Please wait... "
     )
@@ -2524,6 +2579,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 text=broadcast_message,
             )
             sent_to_users += 1
+            _mark_user_dm_eligible(user_broadcast_id)
             
         except Exception as e:
             error_str = str(e).lower()
@@ -2532,13 +2588,20 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             if "bot was blocked" in error_str or "user is deactivated" in error_str:
                 blocked_count += 1
                 logger.info(f"User {user_broadcast_id} blocked the bot")
+                _mark_user_dm_ineligible(user_broadcast_id)
                 # Remove from database
                 if user_broadcast_id in USERS_DATABASE:
                     _remove_user_everywhere(user_broadcast_id)
                 
-            elif "chat not found" in error_str or "user not found" in error_str:
+            elif (
+                "chat not found" in error_str
+                or "user not found" in error_str
+                or "forbidden" in error_str
+                or "can't initiate conversation" in error_str
+            ):
                 failed_users += 1
                 logger.warning(f"User {user_broadcast_id} not found")
+                _mark_user_dm_ineligible(user_broadcast_id)
                 # Remove from database
                 if user_broadcast_id in USERS_DATABASE:
                     _remove_user_everywhere(user_broadcast_id)
@@ -2626,6 +2689,10 @@ async def broadcast_content(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     
     # Get users and groups (excluding opted-out users)
     active_users, all_groups_set = _get_broadcast_targets()
+    active_users = {
+        uid for uid in active_users
+        if uid in DM_ELIGIBLE_USERS or uid in MANUAL_BROADCAST_USERS
+    }
     all_groups = sorted(all_groups_set)
     
     total_users = len(active_users)
@@ -5049,7 +5116,12 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     current_time = time.time()
-    users_text = f"ALL USERS ({total_users} Total)\n" + "=" * 50 + "\n\n"
+    users_text = (
+        f"ALL USERS ({total_users} Total)\n"
+        f"DM Eligible: {len(DM_ELIGIBLE_USERS)}\n"
+        + "=" * 50
+        + "\n\n"
+    )
 
     for idx, user_info in enumerate(all_users, 1):
         uid = int(user_info.get("user_id", 0))
@@ -5078,6 +5150,7 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             f"{idx}. {name} {opted_out}\n"
             f"   ID: {uid}\n"
             f"   Username: {username_text}\n"
+            f"   DM Eligible: {'Yes' if uid in DM_ELIGIBLE_USERS else 'No'}\n"
             f"   Joined: {joined_str}\n"
             f"   Last Seen: {last_seen_str}\n\n"
         )
@@ -5608,10 +5681,10 @@ async def vcguide_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "4. If assistant is banned, unban it.\n"
         "5. Start group voice chat.\n\n"
         "Use commands in group:\n"
-        "- /vplay <song name or url>\n"
-        "- /vqueue\n"
-        "- /vskip\n"
-        "- /vstop\n\n"
+        "- /play <song name or url>\n"
+        "- /queue\n"
+        "- /skip\n"
+        "- /stop\n\n"
         "Shortcut:\n"
         "- /play <song> in group will auto-use VC play.\n\n"
         "Tip: If playback fails, check admin rights + active VC first \u2705"
@@ -5662,11 +5735,11 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await _register_user_from_update(update)
 
     if update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
-        await update.effective_message.reply_text("/vplay works in groups only.")
+        await update.effective_message.reply_text("/play works in groups only.")
         return
 
     if not context.args:
-        await update.effective_message.reply_text("Usage: /vplay <song name or url>")
+        await update.effective_message.reply_text("Usage: /play <song name or url>")
         return
 
     query = " ".join(context.args).strip()
@@ -5765,15 +5838,7 @@ async def vplay_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                         f"Error: {fallback_error}"
                     ),
                 )
-        troubleshooting = (
-            "\n\nQuick checks:\n"
-            "1. Assistant account is in this group.\n"
-            "2. Bot + assistant are admins with voice chat rights.\n"
-            "3. A voice chat is started in the group.\n"
-            "4. VC_API_ID/VC_API_HASH (or API_ID/API_HASH) + ASSISTANT_SESSION are valid."
-            "\n5. Railway has installed latest requirements and service was redeployed."
-        )
-        await status_msg.edit_text(f"VC play failed: {err}{troubleshooting}")
+        await status_msg.edit_text(f"VC play failed: {err}")
 
 
 async def vstop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -6290,8 +6355,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "2. Give both admin rights (voice chat permissions).\n"
             "3. Enable Invite Users via Link for bot admin role.\n"
             "4. If assistant is banned, unban it.\n"
-            "5. Start group voice chat and use /vplay <song name>.\n\n"
-            "Controls: /vqueue, /vskip, /vstop\n"
+            "5. Start group voice chat and use /play <song name>.\n\n"
+            "Controls: /queue, /skip, /stop\n"
             "Tip: /play <song> in group also starts VC play \u2705",
             reply_markup=reply_markup,
         )
@@ -6425,6 +6490,7 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
     """Handle private chat messages with intent routing + memory."""
     user_id = update.effective_user.id
     await _register_user(user_id)
+    _mark_user_dm_eligible(user_id)
 
     if not update.message or not update.message.text:
         return
@@ -6505,6 +6571,7 @@ async def handle_private_media(update: Update, context: ContextTypes.DEFAULT_TYP
     if not update.message or not update.effective_user:
         return
     await _register_user_from_update(update)
+    _mark_user_dm_eligible(update.effective_user.id)
     media_kind = _detect_message_media_kind(update.message)
     if not media_kind:
         return
@@ -7119,13 +7186,15 @@ def _default_bot_commands() -> list[BotCommand]:
         BotCommand("start", "Open start menu"),
         BotCommand("help", "Open help guide"),
         BotCommand("play", "VC in group / file in private"),
+        BotCommand("queue", "Show voice queue (group)"),
+        BotCommand("skip", "Skip current VC track (group)"),
         BotCommand("song", "Search and send song"),
         BotCommand("download", "Same as song"),
         BotCommand("yt", "Download from YouTube link"),
-        BotCommand("vplay", "Play in voice chat"),
-        BotCommand("vqueue", "Show voice queue"),
-        BotCommand("vskip", "Skip current VC track"),
-        BotCommand("vstop", "Stop VC playback"),
+        BotCommand("vplay", "Play in voice chat (legacy)"),
+        BotCommand("vqueue", "Show voice queue (legacy)"),
+        BotCommand("vskip", "Skip current VC track (legacy)"),
+        BotCommand("vstop", "Stop VC playback (legacy)"),
         BotCommand("vcguide", "Voice chat setup guide"),
         BotCommand("chatid", "Show chat and user IDs"),
         BotCommand("connect", "Connect group to DM controls"),
@@ -7172,7 +7241,7 @@ def _default_bot_commands() -> list[BotCommand]:
         BotCommand("report", "Report replied message"),
         BotCommand("locks", "Show current locks"),
         BotCommand("flood", "Show flood settings"),
-        BotCommand("stop", "Opt out from broadcasts"),
+        BotCommand("stop", "Stop VC in group / opt-out in private"),
     ]
 
 
@@ -7292,6 +7361,8 @@ def main() -> None:
     
     # Song download commands
     application.add_handler(CommandHandler("play", play_command))
+    application.add_handler(CommandHandler("queue", vqueue_command))
+    application.add_handler(CommandHandler("skip", vskip_command))
     application.add_handler(CommandHandler("song", song_command))
     application.add_handler(CommandHandler("download", download_command))
     application.add_handler(CommandHandler("yt", yt_command))

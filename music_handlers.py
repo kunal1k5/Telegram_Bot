@@ -7,7 +7,10 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, List, Optional, Set
 
 from telegram import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
-from telegram.constants import ChatType
+from telegram.constants import ChatType, ParseMode
+
+from music_card import create_music_card
+from ui import cinematic_caption, music_controls
 
 
 class MusicHandlers:
@@ -375,10 +378,28 @@ Behavior:
         try:
             if thumb:
                 await status_message.delete()
+                duration_text = self.format_vc_duration(getattr(track, "duration", None))
+                pretty_caption = cinematic_caption(
+                    getattr(track, "title", "Unknown Track"),
+                    duration_text,
+                    requested_by,
+                )
+                support_user = (self.channel_username or "").lstrip("@")
+                dev_user = (self.owner_username or "").lstrip("@")
+                support_url = f"https://t.me/{support_user}" if support_user else "https://t.me"
+                dev_url = f"https://t.me/{dev_user}" if dev_user else "https://t.me"
+                cinematic_keyboard = music_controls(support_url, dev_url, is_paused=vc.is_paused(chat_id))
+                card = create_music_card(
+                    thumb,
+                    getattr(track, "title", "Unknown Track"),
+                    duration_text,
+                    requested_by,
+                )
                 panel_message = await update.effective_message.reply_photo(
-                    photo=thumb,
-                    caption=caption,
-                    reply_markup=keyboard,
+                    photo=card,
+                    caption=pretty_caption,
+                    reply_markup=cinematic_keyboard,
+                    parse_mode=ParseMode.HTML,
                 )
                 self._start_panel_updater(chat_id, panel_message, get_vc_manager)
                 return

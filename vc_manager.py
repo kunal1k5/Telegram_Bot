@@ -44,6 +44,9 @@ class VCChatState:
     last_auto_advanced_serial: int = 0
     auto_task: Optional[asyncio.Task] = None
     assistant_verified: bool = False
+    assistant_verified_at: float = 0.0
+    resolved_chat_id: Optional[int] = None
+    resolved_peer: Any = None
 
 
 class VCManager:
@@ -74,6 +77,7 @@ class VCManager:
         self._paused_chats: set[int] = set()
 
         self._default_track_seconds = int(os.getenv("VC_DEFAULT_TRACK_SECONDS", "240"))
+        self._assistant_verify_ttl_seconds = int(os.getenv("VC_ASSISTANT_VERIFY_TTL_SECONDS", "600"))
         self._stream_end_handler_registered = False
 
     def _state(self, chat_id: int) -> VCChatState:
@@ -238,11 +242,20 @@ class VCManager:
 
     async def verify_assistant_once(self, chat_id: int) -> bool:
         state = self._state(chat_id)
-        if state.assistant_verified:
+        now = time.time()
+        if (
+            state.assistant_verified
+            and state.assistant_verified_at > 0
+            and (now - state.assistant_verified_at) <= self._assistant_verify_ttl_seconds
+        ):
             return True
         is_in_chat = await self.is_assistant_in_chat(chat_id)
         if is_in_chat:
             state.assistant_verified = True
+            state.assistant_verified_at = now
+        else:
+            state.assistant_verified = False
+            state.assistant_verified_at = 0.0
         return is_in_chat
 
     async def join_chat_via_invite(self, invite_link: str) -> None:
@@ -607,40 +620,126 @@ class VCManager:
             return self._audio_piped_cls(url)
         return url
 
+    @staticmethod
+    def _is_peer_invalid_error(error: Exception) -> bool:
+        return "peer id invalid" in str(error).lower()
+
+    @staticmethod
+    def _chat_id_candidates(chat_id: int) -> list[int]:
+        candidates: list[int] = [chat_id]
+        # Legacy group id fallback (-123...) -> supergroup style (-100123...)
+        text = str(chat_id)
+        if chat_id < 0 and not text.startswith("-100"):
+            try:
+                candidates.append(int(f"-100{abs(chat_id)}"))
+            except Exception:
+                pass
+        # de-dup preserving order
+        out: list[int] = []
+        seen: set[int] = set()
+        for cid in candidates:
+            if cid in seen:
+                continue
+            seen.add(cid)
+            out.append(cid)
+        return out
+
+    async def _resolve_call_targets(self, chat_id: int, state: VCChatState) -> tuple[list[Any], int]:
+        targets: list[Any] = []
+        canonical_chat_id = chat_id
+        seen_keys: set[str] = set()
+
+        def _add_target(value: Any) -> None:
+            key = repr(value)
+            if key in seen_keys:
+                return
+            seen_keys.add(key)
+            targets.append(value)
+
+        _add_target(chat_id)
+        if state.resolved_chat_id is not None:
+            _add_target(state.resolved_chat_id)
+        if state.resolved_peer is not None:
+            _add_target(state.resolved_peer)
+
+        for candidate in self._chat_id_candidates(chat_id):
+            try:
+                chat = await self._assistant.get_chat(candidate)
+                candidate_id = getattr(chat, "id", None)
+                if isinstance(candidate_id, int):
+                    canonical_chat_id = candidate_id
+                    _add_target(candidate_id)
+                    state.resolved_chat_id = candidate_id
+                if hasattr(self._assistant, "resolve_peer"):
+                    try:
+                        peer = await self._assistant.resolve_peer(candidate_id or candidate)
+                        if peer is not None:
+                            _add_target(peer)
+                            state.resolved_peer = peer
+                    except Exception:
+                        pass
+                break
+            except Exception:
+                continue
+
+        return targets, canonical_chat_id
+
     async def _start_or_replace_stream(self, chat_id: int, state: VCChatState, track: VCTrack) -> None:
-        async def _attempt_once() -> None:
+        async def _attempt_once(target: Any) -> None:
             stream = self._make_input_stream(track.stream_url)
             if state.active_call:
                 if self._supports_change_api:
-                    await self._calls.change_stream(chat_id, stream)
+                    await self._calls.change_stream(target, stream)
                 elif self._supports_play_api:
-                    await self._calls.play(chat_id, stream)
+                    await self._calls.play(target, stream)
                 elif self._supports_join_api:
-                    await self._calls.join_group_call(chat_id, stream)
+                    await self._calls.join_group_call(target, stream)
                 else:
                     raise RuntimeError("VC backend does not support stream replacement.")
                 return
 
             if self._supports_join_api:
-                await self._calls.join_group_call(chat_id, stream)
+                await self._calls.join_group_call(target, stream)
                 return
             if self._supports_play_api:
-                await self._calls.play(chat_id, stream)
+                await self._calls.play(target, stream)
                 return
             raise RuntimeError("Could not start stream: unsupported VC backend API.")
 
-        try:
-            await _attempt_once()
-            return
-        except Exception as e:
-            # One-time peer refresh retry for transient PeerIdInvalid.
-            if "peer id invalid" not in str(e).lower():
-                raise
+        targets, canonical_chat_id = await self._resolve_call_targets(chat_id, state)
+        last_error: Optional[Exception] = None
+
+        for target in targets:
             try:
-                await self._assistant.get_chat(chat_id)
+                await _attempt_once(target)
+                return
+            except Exception as e:
+                last_error = e
+                # For non-peer errors, fail immediately.
+                if not self._is_peer_invalid_error(e):
+                    raise
+                continue
+
+        # Final one-time refresh pass for peer invalid.
+        if last_error and self._is_peer_invalid_error(last_error):
+            state.assistant_verified = False
+            state.assistant_verified_at = 0.0
+            try:
+                await self.verify_assistant_once(canonical_chat_id)
             except Exception:
                 pass
-            await _attempt_once()
+            targets, _ = await self._resolve_call_targets(canonical_chat_id, state)
+            for target in targets:
+                try:
+                    await _attempt_once(target)
+                    return
+                except Exception as e:
+                    last_error = e
+                    if not self._is_peer_invalid_error(e):
+                        raise
+
+        if last_error:
+            raise RuntimeError(str(last_error)) from last_error
 
     def _mark_track_started(self, chat_id: int, state: VCChatState, track: VCTrack) -> None:
         state.play_serial += 1

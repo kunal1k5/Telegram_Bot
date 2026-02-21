@@ -1,6 +1,8 @@
 python-telegram-bot==21.4
 google-genai
 httpx
+Pillow
+requests
 yt-dlp>=2025.1.0
 pyrogram==2.0.106
 tgcrypto==1.2.5
