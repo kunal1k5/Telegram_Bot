@@ -149,26 +149,37 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Send premium start image first (if available), then send panel text + buttons.
     try:
+        sent_photo = False
+
         if START_PANEL_PHOTO_FILE_ID:
             await update.message.reply_photo(photo=START_PANEL_PHOTO_FILE_ID)
+            sent_photo = True
         elif START_PANEL_PHOTO_URL:
             await update.message.reply_photo(photo=START_PANEL_PHOTO_URL)
-        else:
+            sent_photo = True
+
+        if not sent_photo and create_start_card:
+            profile_url = ""
+            photos = await context.bot.get_user_profile_photos(update.effective_user.id, limit=1)
+            if photos.photos:
+                file_id = photos.photos[0][-1].file_id
+                pf = await context.bot.get_file(file_id)
+                profile_url = pf.file_path or ""
+
             banner_path = Path(START_BANNER_PATH)
             if not banner_path.is_absolute():
-                root_banner = ROOT_DIR / banner_path
-                if root_banner.exists():
-                    banner_path = root_banner
-            if banner_path.exists() and create_start_card:
-                profile_url = ""
-                photos = await context.bot.get_user_profile_photos(update.effective_user.id, limit=1)
-                if photos.photos:
-                    file_id = photos.photos[0][-1].file_id
-                    pf = await context.bot.get_file(file_id)
-                    profile_url = pf.file_path or ""
-                card = create_start_card(str(banner_path), user, profile_url)
-                await update.message.reply_photo(photo=card)
-            elif banner_path.exists():
+                banner_path = ROOT_DIR / banner_path
+
+            # start_card has built-in gradient fallback even if banner file is missing.
+            card = create_start_card(str(banner_path), user, profile_url)
+            await update.message.reply_photo(photo=card)
+            sent_photo = True
+
+        if not sent_photo:
+            banner_path = Path(START_BANNER_PATH)
+            if not banner_path.is_absolute():
+                banner_path = ROOT_DIR / banner_path
+            if banner_path.exists():
                 with banner_path.open("rb") as f:
                     await update.message.reply_photo(photo=f)
     except Exception:
