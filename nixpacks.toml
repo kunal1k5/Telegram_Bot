@@ -19,7 +19,7 @@ aptPkgs = [
 ]
 
 [phases.install]
-cmds = ["pip install --upgrade pip", "pip install -r requirements.txt"]
+cmds = ["pip install --upgrade pip", "pip install -r project/requirements.txt"]
 
 [start]
-cmd = "python bot.py"
+cmd = "python project/bot.py"

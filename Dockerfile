@@ -25,10 +25,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY requirements.txt /app/requirements.txt
+COPY project/requirements.txt /app/project/requirements.txt
 RUN pip install --no-cache-dir -U pip \
-  && pip install --no-cache-dir -r /app/requirements.txt
+  && pip install --no-cache-dir -r /app/project/requirements.txt
 
 COPY . /app
 
-CMD ["python", "bot.py"]
+CMD ["python", "project/bot.py"]
