@@ -3,7 +3,7 @@ import os
 import subprocess
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.constants import ChatMemberStatus
+from telegram.constants import ChatMemberStatus, ChatType
 from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
@@ -13,7 +13,7 @@ from telegram.ext import (
 
 from game.economy import balance
 from game.inventory import get_inventory, use_item
-from game.leaderboard import get_rank, top_players
+from game.leaderboard import get_rank, load as load_leaderboard, top_players
 from game.mafia_engine import (
     MIN_PLAYERS,
     active_games,
@@ -24,7 +24,6 @@ from game.mafia_engine import (
     start_game,
     start_join_timer,
 )
-from game.roles import ROLE_INFO
 from game.shop import SHOP_ITEMS, buy
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
@@ -35,12 +34,7 @@ CONTACT_USERNAME = os.getenv("CONTACT_USERNAME", "YOUR_CONTACT").strip("@")
 
 def build_start_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
-        [
-            InlineKeyboardButton(
-                "💬 Chat With Me",
-                url=f"https://t.me/{BOT_USERNAME}",
-            )
-        ],
+        [InlineKeyboardButton("💬 Chat With Me", url=f"https://t.me/{BOT_USERNAME}")],
         [
             InlineKeyboardButton(
                 "➕ Add To Group",
@@ -61,9 +55,7 @@ def build_start_keyboard() -> InlineKeyboardMarkup:
                 url=f"https://t.me/{CONTACT_USERNAME}",
             )
         ],
-        [
-            InlineKeyboardButton("🎮 Mafia Game", callback_data="mafia"),
-        ],
+        [InlineKeyboardButton("🎮 Mafia Game", callback_data="mafia_hub")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -79,6 +71,7 @@ def build_mafia_lobby_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("🛒 Shop", callback_data="mafia_shop"),
                 InlineKeyboardButton("👤 My Profile", callback_data="mafia_profile"),
             ],
+            [InlineKeyboardButton("🔙 Back", callback_data="mafia_hub")],
         ]
     )
 
@@ -86,10 +79,10 @@ def build_mafia_lobby_keyboard() -> InlineKeyboardMarkup:
 def build_mafia_shop_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("🛡 Shield (30)", callback_data="mafia_buy_shield")],
-            [InlineKeyboardButton("🗳 Double Vote (40)", callback_data="mafia_buy_doublevote")],
-            [InlineKeyboardButton("❤️ Extra Life (50)", callback_data="mafia_buy_extralife")],
-            [InlineKeyboardButton("🔙 Back", callback_data="mafia_back")],
+            [InlineKeyboardButton("🛡 Buy Shield", callback_data="buy_shield")],
+            [InlineKeyboardButton("🗳 Buy Double Vote", callback_data="buy_doublevote")],
+            [InlineKeyboardButton("❤️ Buy Extra Life", callback_data="buy_extralife")],
+            [InlineKeyboardButton("🔙 Back", callback_data="mafia_hub")],
         ]
     )
 
@@ -99,23 +92,15 @@ def build_profile_keyboard() -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton("🛒 Open Shop", callback_data="mafia_shop")],
             [InlineKeyboardButton("🏆 Leaderboard", callback_data="mafia_leaderboard")],
-            [InlineKeyboardButton("🔙 Back", callback_data="mafia_back")],
+            [InlineKeyboardButton("🔙 Back", callback_data="mafia_hub")],
         ]
     )
-
-
-def build_back_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="mafia_back")]])
 
 
 def _lobby_text(chat_id: int) -> str:
     game = active_games.get(chat_id)
     joined = len(game["players"]) if game else 0
-    return (
-        "🎭 MAFIA GAME LOBBY\n\n"
-        f"Players Joined: {joined} / 25\n\n"
-        "⏳ Waiting for players..."
-    )
+    return f"🎭 MAFIA GAME LOBBY\n\nPlayers Joined: {joined} / 25\n\n⏳ Waiting for players..."
 
 
 def _launch_join_lobby(chat_id: int, join_time: int, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -129,16 +114,13 @@ async def _is_admin_chat(chat_id: int, user_id: int, context: ContextTypes.DEFAU
     return member.status in {ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER}
 
 
-def _wins_and_rank(user_id: int) -> tuple[int, str, int | None]:
-    rows = top_players()
-    wins = 0
-    rank_pos = None
-    for idx, (uid, w) in enumerate(rows, start=1):
-        if str(user_id) == str(uid):
-            wins = int(w)
-            rank_pos = idx
-            break
-    return wins, get_rank(wins), rank_pos
+def _wins_rank_text(user_id: int) -> tuple[int, str, str]:
+    all_wins = load_leaderboard()
+    wins = int(all_wins.get(str(user_id), 0))
+    sorted_rows = sorted(all_wins.items(), key=lambda x: x[1], reverse=True)
+    pos = next((i for i, (uid, _) in enumerate(sorted_rows, 1) if uid == str(user_id)), None)
+    pos_text = f"#{pos}" if pos else "Unranked"
+    return wins, get_rank(wins), pos_text
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -153,6 +135,119 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "🌙 Good Evening 💖"
     )
     await update.message.reply_text(text, reply_markup=build_start_keyboard())
+
+
+async def mafia_hub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = (
+        "🎭 MAFIA GAME HUB\n\n"
+        "Welcome to the ultimate social strategy battle.\n\n"
+        "💀 Deception.\n"
+        "🕵 Investigation.\n"
+        "🛡 Protection.\n"
+        "🔥 Survival.\n\n"
+        "Choose what you want to explore:"
+    )
+    keyboard = [
+        [InlineKeyboardButton("📜 Roles & Powers", callback_data="mafia_roles")],
+        [InlineKeyboardButton("🛒 Shop", callback_data="mafia_shop")],
+        [InlineKeyboardButton("👤 My Profile", callback_data="mafia_profile")],
+        [InlineKeyboardButton("📖 How To Play", callback_data="mafia_guide")],
+        [InlineKeyboardButton("🚀 Start Game (Group)", callback_data="mafia_start_group")],
+        [InlineKeyboardButton("🔙 Back", callback_data="back_start")],
+    ]
+    await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def mafia_roles(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    keyboard = [
+        [InlineKeyboardButton("🔪 Mafia", callback_data="role_mafia")],
+        [InlineKeyboardButton("🛡 Doctor", callback_data="role_doctor")],
+        [InlineKeyboardButton("🕵 Detective", callback_data="role_detective")],
+        [InlineKeyboardButton("🧙 Witch", callback_data="role_witch")],
+        [InlineKeyboardButton("🤫 Silencer", callback_data="role_silencer")],
+        [InlineKeyboardButton("👑 Mayor", callback_data="role_mayor")],
+        [InlineKeyboardButton("🔙 Back", callback_data="mafia_hub")],
+    ]
+    await update.callback_query.edit_message_text(
+        "📜 Select a role to see its power:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def role_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    role = update.callback_query.data.split("_")[1]
+    role_texts = {
+        "mafia": "🔪 Mafia\nKill one player each night.\nGoal: Outnumber town.",
+        "doctor": "🛡 Doctor\nSave one player each night.",
+        "detective": "🕵 Detective\nReveal role of one player.",
+        "witch": "🧙 Witch\n1 Heal potion + 1 Poison potion.",
+        "silencer": "🤫 Silencer\nMute one player next day.",
+        "mayor": "👑 Mayor\nYour vote counts as 2 permanently.",
+    }
+    keyboard = [
+        [InlineKeyboardButton("🛒 Open Shop", callback_data="mafia_shop")],
+        [InlineKeyboardButton("👤 My Profile", callback_data="mafia_profile")],
+        [InlineKeyboardButton("🔙 Back", callback_data="mafia_roles")],
+    ]
+    await update.callback_query.edit_message_text(
+        role_texts.get(role, "Role not found."),
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def mafia_shop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    coins = balance(user_id)
+    text = (
+        "🛒 MAFIA SHOP\n\n"
+        f"💰 Coins: {coins}\n\n"
+        "🛡 Shield - 30 coins\n"
+        "🗳 Double Vote - 40 coins\n"
+        "❤️ Extra Life - 50 coins"
+    )
+    await update.callback_query.edit_message_text(text, reply_markup=build_mafia_shop_keyboard())
+
+
+async def mafia_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    coins = balance(user_id)
+    inv = get_inventory(user_id)
+    wins, tier, pos_text = _wins_rank_text(user_id)
+    text = (
+        "👤 PLAYER PROFILE\n\n"
+        f"💰 Coins: {coins}\n"
+        f"🏆 Rank: {pos_text} ({tier})\n"
+        f"🎯 Wins: {wins}\n\n"
+        "🎒 Inventory:\n"
+        f"🛡 Shield: {inv.get('shield', 0)}\n"
+        f"🗳 Double Vote: {inv.get('doublevote', 0)}\n"
+        f"❤️ Extra Life: {inv.get('extralife', 0)}"
+    )
+    await update.callback_query.edit_message_text(text, reply_markup=build_profile_keyboard())
+
+
+async def mafia_guide(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = (
+        "📖 HOW TO PLAY MAFIA\n\n"
+        "1️⃣ Group me /mafia start karo\n"
+        "2️⃣ Players join karte hain\n"
+        "3️⃣ Roles secretly DM me milte hain\n"
+        "4️⃣ Night phase - special powers use\n"
+        "5️⃣ Day phase - voting\n"
+        "6️⃣ Mafia vs Town battle until one wins\n\n"
+        "Commands:\n"
+        "🎮 /mafia - Start game\n"
+        "📜 /myrole - Check your role\n"
+        "🏆 /leaderboard - View ranking\n\n"
+        "Goal:\n"
+        "Town wins -> Eliminate all mafia\n"
+        "Mafia wins -> Outnumber town"
+    )
+    keyboard = [
+        [InlineKeyboardButton("🚀 Start Game", callback_data="mafia_start_group")],
+        [InlineKeyboardButton("🔙 Back", callback_data="mafia_hub")],
+    ]
+    await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 async def mafia_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -173,8 +268,7 @@ async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def extend_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = update.effective_chat.id
-    remaining = extend_join_time(chat_id, 30)
+    remaining = extend_join_time(update.effective_chat.id, 30)
     if remaining is None:
         await update.message.reply_text("No active joining phase to extend.")
         return
@@ -223,8 +317,7 @@ async def buy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.args:
         await update.message.reply_text("Use: /buy <item>")
         return
-    msg = buy(update.effective_user.id, context.args[0])
-    await update.message.reply_text(msg)
+    await update.message.reply_text(buy(update.effective_user.id, context.args[0]))
 
 
 async def buildinfo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -254,24 +347,52 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user_id = q.from_user.id
     chat_id = q.message.chat.id
 
-    if data in {"help", "vcguide", "settings"}:
-        await q.edit_message_text("This panel is under setup.", reply_markup=build_start_keyboard())
+    if data == "back_start":
+        await q.edit_message_text("Main panel", reply_markup=build_start_keyboard())
         return
-
-    if data == "mafia":
+    if data == "mafia_hub":
+        await mafia_hub(update, context)
+        return
+    if data == "mafia_roles":
+        await mafia_roles(update, context)
+        return
+    if data.startswith("role_"):
+        await role_info(update, context)
+        return
+    if data == "mafia_shop":
+        await mafia_shop(update, context)
+        return
+    if data == "mafia_profile":
+        await mafia_profile(update, context)
+        return
+    if data == "mafia_guide":
+        await mafia_guide(update, context)
+        return
+    if data == "mafia_leaderboard":
+        rows = top_players()
+        text = "🏆 Top Players\n\n" + (
+            "\n".join([f"{i}. {u} - {w} Wins" for i, (u, w) in enumerate(rows, 1)])
+            if rows
+            else "No entries yet."
+        )
+        await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="mafia_hub")]]))
+        return
+    if data == "mafia_start_group":
+        if q.message.chat.type == ChatType.PRIVATE:
+            await q.edit_message_text(
+                "🚀 Start mafia in a group using /mafia there.",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("➕ Add To Group", url=f"https://t.me/{BOT_USERNAME}?startgroup=true")]]
+                ),
+            )
+            return
         _launch_join_lobby(chat_id, 60, context)
         await q.edit_message_text(_lobby_text(chat_id), reply_markup=build_mafia_lobby_keyboard())
         return
-
     if data == "mafia_join":
         ok, msg = join_game(chat_id, user_id)
-        prefix = "✅" if ok else "❌"
-        await q.edit_message_text(
-            f"{_lobby_text(chat_id)}\n\n{prefix} {msg}",
-            reply_markup=build_mafia_lobby_keyboard(),
-        )
+        await q.edit_message_text(f"{_lobby_text(chat_id)}\n\n{'✅' if ok else '❌'} {msg}", reply_markup=build_mafia_lobby_keyboard())
         return
-
     if data == "mafia_force_start":
         if not await _is_admin_chat(chat_id, user_id, context):
             await q.answer("Admins only.", show_alert=True)
@@ -283,18 +404,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await q.edit_message_text("🚀 Admin started the game manually!")
         await start_game(chat_id, context)
         return
-
     if data == "mafia_extend":
         remaining = extend_join_time(chat_id, 30)
         if remaining is None:
             await q.answer("No joining phase active.", show_alert=True)
             return
-        await q.edit_message_text(
-            f"{_lobby_text(chat_id)}\n\n⏳ Extended. Remaining: {remaining}s",
-            reply_markup=build_mafia_lobby_keyboard(),
-        )
+        await q.edit_message_text(f"{_lobby_text(chat_id)}\n\n⏳ Extended. Remaining: {remaining}s", reply_markup=build_mafia_lobby_keyboard())
         return
-
     if data == "mafia_cancel":
         if not await _is_admin_chat(chat_id, user_id, context):
             await q.answer("Admins only.", show_alert=True)
@@ -304,61 +420,17 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
         await q.edit_message_text("❌ Game cancelled by admin.")
         return
-
-    if data == "mafia_shop":
-        coins = balance(user_id)
-        await q.edit_message_text(
-            f"🛒 MAFIA SHOP\n\n💰 Your Coins: {coins}",
-            reply_markup=build_mafia_shop_keyboard(),
-        )
-        return
-
-    if data.startswith("mafia_buy_"):
-        item = data.split("mafia_buy_", 1)[1]
-        if item not in SHOP_ITEMS:
-            await q.answer("Invalid item", show_alert=True)
-            return
+    if data in {"buy_shield", "buy_doublevote", "buy_extralife"}:
+        item = data.split("buy_", 1)[1]
         msg = buy(user_id, item)
         coins = balance(user_id)
         await q.edit_message_text(
-            f"🛒 MAFIA SHOP\n\n💰 Your Coins: {coins}\n\n{msg}",
+            f"🛒 MAFIA SHOP\n\n💰 Coins: {coins}\n\n{msg}",
             reply_markup=build_mafia_shop_keyboard(),
         )
         return
-
-    if data == "mafia_profile":
-        inv = get_inventory(user_id)
-        wins, tier, rank_pos = _wins_and_rank(user_id)
-        coins = balance(user_id)
-        rank_text = f"#{rank_pos}" if rank_pos is not None else "Unranked"
-        text = (
-            "👤 PLAYER PROFILE\n\n"
-            f"Coins: {coins}\n"
-            f"Wins: {wins}\n"
-            "Losses: 0\n"
-            f"Season Rank: {rank_text} ({tier})\n\n"
-            "Inventory:\n"
-            f"🛡 Shield x{inv.get('shield', 0)}\n"
-            f"🗳 Double Vote x{inv.get('doublevote', 0)}\n"
-            f"❤️ Extra Life x{inv.get('extralife', 0)}"
-        )
-        await q.edit_message_text(text, reply_markup=build_profile_keyboard())
-        return
-
-    if data == "mafia_leaderboard":
-        rows = top_players()
-        if not rows:
-            text = "🏆 Top Players\n\nNo entries yet."
-        else:
-            lines = ["🏆 Top Players\n"]
-            for idx, (uid, wins) in enumerate(rows, start=1):
-                lines.append(f"{idx}️⃣ {uid} - {wins} Wins")
-            text = "\n".join(lines)
-        await q.edit_message_text(text, reply_markup=build_back_keyboard())
-        return
-
-    if data == "mafia_back":
-        await q.edit_message_text(_lobby_text(chat_id), reply_markup=build_mafia_lobby_keyboard())
+    if data in {"help", "vcguide", "settings"}:
+        await q.edit_message_text("This panel is under setup.", reply_markup=build_start_keyboard())
         return
 
     try:
@@ -382,11 +454,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
             role = game["roles"].get(user_id)
             vote_power = 2 if role == "mayor" else 1
-
             inv = get_inventory(user_id)
             if role != "mayor" and inv.get("doublevote", 0) > 0 and use_item(user_id, "doublevote"):
                 vote_power = 2
-
             game["votes"][target] = game["votes"].get(target, 0) + vote_power
             game["day_voters"].add(user_id)
             return
@@ -402,27 +472,21 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if user_id not in game.get("alive", []):
                 return
 
-            if ability == "kill":
-                if game["roles"].get(user_id) == "mafia":
-                    game["night_actions"]["kill"] = target
-            elif ability == "save":
-                if game["roles"].get(user_id) == "doctor":
-                    game["night_actions"]["save"] = target
-            elif ability == "check":
-                if game["roles"].get(user_id) == "detective":
-                    role = game["roles"].get(target, "unknown")
-                    await context.bot.send_message(user_id, f"🕵 Role: {role}")
-            elif ability == "heal":
-                if game["roles"].get(user_id) == "witch" and game["witch_potions"]["heal"] > 0:
-                    game["night_actions"]["heal"] = target
-                    game["witch_potions"]["heal"] -= 1
-            elif ability == "poison":
-                if game["roles"].get(user_id) == "witch" and game["witch_potions"]["poison"] > 0:
-                    game["night_actions"]["poison"] = target
-                    game["witch_potions"]["poison"] -= 1
-            elif ability == "silence":
-                if game["roles"].get(user_id) == "silencer":
-                    game["silenced"] = target
+            if ability == "kill" and game["roles"].get(user_id) == "mafia":
+                game["night_actions"]["kill"] = target
+            elif ability == "save" and game["roles"].get(user_id) == "doctor":
+                game["night_actions"]["save"] = target
+            elif ability == "check" and game["roles"].get(user_id) == "detective":
+                role = game["roles"].get(target, "unknown")
+                await context.bot.send_message(user_id, f"🕵 Role: {role}")
+            elif ability == "heal" and game["roles"].get(user_id) == "witch" and game["witch_potions"]["heal"] > 0:
+                game["night_actions"]["heal"] = target
+                game["witch_potions"]["heal"] -= 1
+            elif ability == "poison" and game["roles"].get(user_id) == "witch" and game["witch_potions"]["poison"] > 0:
+                game["night_actions"]["poison"] = target
+                game["witch_potions"]["poison"] -= 1
+            elif ability == "silence" and game["roles"].get(user_id) == "silencer":
+                game["silenced"] = target
             return
     except Exception:
         pass
