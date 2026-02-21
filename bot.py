@@ -117,6 +117,9 @@ LOG_CHANNEL_USERNAME: Final[str] = os.getenv("LOG_CHANNEL_USERNAME", CHANNEL_USE
 LOG_CHANNEL_ID: Final[int] = int(os.getenv("LOG_CHANNEL_ID", "0"))
 ENABLE_USAGE_LOGS: Final[bool] = os.getenv("ENABLE_USAGE_LOGS", "true").lower() == "true"
 CHAT_EXPORT_DIR_ENV: Final[str] = os.getenv("CHAT_EXPORT_DIR", "").strip()
+RAILWAY_PUBLIC_DOMAIN: Final[str] = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
+WEBHOOK_URL_ENV: Final[str] = os.getenv("WEBHOOK_URL", "").strip()
+USE_WEBHOOK: Final[bool] = os.getenv("USE_WEBHOOK", "false").lower() in {"1", "true", "yes", "on"}
 
 # Admin ID (Bot owner for broadcasts)
 ADMIN_ID: Final[int] = int(os.getenv("ADMIN_ID", "7971841264"))
@@ -7561,6 +7564,31 @@ def main() -> None:
     # Start the bot
     logger.info(f" {BOT_NAME} is starting...")
     
+    # Railway-friendly mode: webhook when enabled, polling fallback otherwise.
+    webhook_base = WEBHOOK_URL_ENV
+    if not webhook_base and RAILWAY_PUBLIC_DOMAIN:
+        webhook_base = f"https://{RAILWAY_PUBLIC_DOMAIN}".rstrip("/")
+
+    if USE_WEBHOOK and webhook_base:
+        port = int(os.getenv("PORT", "8000"))
+        url_path = BOT_TOKEN
+        webhook_url = f"{webhook_base}/{url_path}"
+        logger.info(" Starting in webhook mode on port %s", port)
+        logger.info(" Webhook URL: %s", webhook_url)
+        print("Bot started successfully")
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            url_path=url_path,
+            webhook_url=webhook_url,
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True,
+            close_loop=False,
+        )
+        return
+
+    logger.info(" Starting in polling mode")
+    print("Bot started successfully")
     application.run_polling(
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=True,
