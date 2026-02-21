@@ -19,7 +19,6 @@ from game.mafia_engine import (
     create_game,
     extend_join_time,
     join_game,
-    player_game_map,
     start_game,
     start_join_timer,
 )
@@ -130,99 +129,71 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await q.edit_message_text(ROLE_INFO.get(key, "No role info found."))
         return
 
-    if data.startswith("night_kill_"):
+    try:
         parts = data.split("_")
-        game_chat_id = int(parts[2]) if len(parts) == 4 else player_game_map.get(user_id, chat_id)
-        target = int(parts[3]) if len(parts) == 4 else int(parts[2])
-        game = active_games.get(game_chat_id)
-        if game and game.get("phase") == "night" and user_id in game.get("alive", []):
-            if game["roles"].get(user_id) == "mafia":
-                game["night_actions"]["kill"] = target
-        return
+        action = parts[0]
 
-    if data.startswith("night_save_"):
-        parts = data.split("_")
-        game_chat_id = int(parts[2]) if len(parts) == 4 else player_game_map.get(user_id, chat_id)
-        target = int(parts[3]) if len(parts) == 4 else int(parts[2])
-        game = active_games.get(game_chat_id)
-        if game and game.get("phase") == "night" and user_id in game.get("alive", []):
-            if game["roles"].get(user_id) == "doctor":
-                game["night_actions"]["save"] = target
-        return
+        if action == "vote":
+            _, chat_id_str, target_str = parts
+            game_chat_id = int(chat_id_str)
+            target = int(target_str)
 
-    if data.startswith("night_check_"):
-        parts = data.split("_")
-        game_chat_id = int(parts[2]) if len(parts) == 4 else player_game_map.get(user_id, chat_id)
-        target = int(parts[3]) if len(parts) == 4 else int(parts[2])
-        game = active_games.get(game_chat_id)
-        if game and game.get("phase") == "night" and user_id in game.get("alive", []):
-            if game["roles"].get(user_id) == "detective":
-                role = game["roles"].get(target, "unknown")
-                await context.bot.send_message(user_id, f"🕵 Player role: {role}")
-        return
+            game = active_games.get(game_chat_id)
+            if not game or game.get("phase") != "day":
+                return
+            if user_id not in game.get("alive", []):
+                return
+            if user_id == game.get("silenced"):
+                return
+            if user_id in game.get("day_voters", set()):
+                return
 
-    if data.startswith("night_heal_"):
-        parts = data.split("_")
-        game_chat_id = int(parts[2]) if len(parts) == 4 else player_game_map.get(user_id, chat_id)
-        target = int(parts[3]) if len(parts) == 4 else int(parts[2])
-        game = active_games.get(game_chat_id)
-        if game and game.get("phase") == "night" and user_id in game.get("alive", []):
-            if game["roles"].get(user_id) == "witch" and game["witch_potions"]["heal"] > 0:
-                game["night_actions"]["heal"] = target
-                game["witch_potions"]["heal"] -= 1
-                await context.bot.send_message(user_id, f"🧪 Heal potion used on {target}.")
-        return
+            role = game["roles"].get(user_id)
+            vote_power = 2 if role == "mayor" else 1
 
-    if data.startswith("night_poison_"):
-        parts = data.split("_")
-        game_chat_id = int(parts[2]) if len(parts) == 4 else player_game_map.get(user_id, chat_id)
-        target = int(parts[3]) if len(parts) == 4 else int(parts[2])
-        game = active_games.get(game_chat_id)
-        if game and game.get("phase") == "night" and user_id in game.get("alive", []):
-            if game["roles"].get(user_id) == "witch" and game["witch_potions"]["poison"] > 0:
-                game["night_actions"]["poison"] = target
-                game["witch_potions"]["poison"] -= 1
-                await context.bot.send_message(user_id, f"☠ Poison potion used on {target}.")
-        return
+            inv = get_inventory(user_id)
+            if role != "mayor" and inv.get("doublevote", 0) > 0 and use_item(user_id, "doublevote"):
+                vote_power = 2
 
-    if data.startswith("night_silence_"):
-        parts = data.split("_")
-        game_chat_id = int(parts[2]) if len(parts) == 4 else player_game_map.get(user_id, chat_id)
-        target = int(parts[3]) if len(parts) == 4 else int(parts[2])
-        game = active_games.get(game_chat_id)
-        if game and game.get("phase") == "night" and user_id in game.get("alive", []):
-            if game["roles"].get(user_id) == "silencer":
-                game["silenced"] = target
-                await context.bot.send_message(user_id, f"🤫 {target} will be silenced next day.")
-        return
-
-    if data.startswith("vote_"):
-        parts = data.split("_")
-        game_chat_id = int(parts[1]) if len(parts) == 3 else chat_id
-        target = int(parts[2]) if len(parts) == 3 else int(parts[1])
-
-        game = active_games.get(game_chat_id)
-        if not game or game.get("phase") != "day":
-            return
-        if user_id not in game.get("alive", []):
-            return
-        if user_id == game.get("silenced"):
-            return
-        if user_id in game.get("day_voters", set()):
+            game["votes"][target] = game["votes"].get(target, 0) + vote_power
+            game["day_voters"].add(user_id)
             return
 
-        role = game["roles"].get(user_id)
-        inv = get_inventory(user_id)
-        if role == "mayor":
-            vote_power = 2
-        elif inv.get("doublevote", 0) > 0:
-            vote_power = 2
-            use_item(user_id, "doublevote")
-        else:
-            vote_power = 1
+        if action == "night":
+            _, ability, chat_id_str, target_str = parts
+            game_chat_id = int(chat_id_str)
+            target = int(target_str)
 
-        game["votes"][target] = game["votes"].get(target, 0) + vote_power
-        game["day_voters"].add(user_id)
+            game = active_games.get(game_chat_id)
+            if not game or game.get("phase") != "night":
+                return
+            if user_id not in game.get("alive", []):
+                return
+
+            if ability == "kill":
+                if game["roles"].get(user_id) == "mafia":
+                    game["night_actions"]["kill"] = target
+            elif ability == "save":
+                if game["roles"].get(user_id) == "doctor":
+                    game["night_actions"]["save"] = target
+            elif ability == "check":
+                if game["roles"].get(user_id) == "detective":
+                    role = game["roles"].get(target, "unknown")
+                    await context.bot.send_message(user_id, f"🕵 Role: {role}")
+            elif ability == "heal":
+                if game["roles"].get(user_id) == "witch" and game["witch_potions"]["heal"] > 0:
+                    game["night_actions"]["heal"] = target
+                    game["witch_potions"]["heal"] -= 1
+            elif ability == "poison":
+                if game["roles"].get(user_id) == "witch" and game["witch_potions"]["poison"] > 0:
+                    game["night_actions"]["poison"] = target
+                    game["witch_potions"]["poison"] -= 1
+            elif ability == "silence":
+                if game["roles"].get(user_id) == "silencer":
+                    game["silenced"] = target
+            return
+    except Exception:
+        pass
 
 
 async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

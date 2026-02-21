@@ -303,6 +303,10 @@ async def resolve_night(chat_id: int, context) -> None:
                 f"💀 Player {kill_target} was killed during the night.",
             )
 
+    if not game["alive"]:
+        _cleanup_game(chat_id)
+        return
+
     winner = check_win(chat_id)
     if winner:
         await context.bot.send_message(chat_id, f"🏆 {winner}")
@@ -358,6 +362,10 @@ async def resolve_votes(chat_id: int, context) -> None:
         await context.bot.send_message(chat_id, f"💀 Player {eliminated} was eliminated!")
 
     game["silenced"] = None
+
+    if not game["alive"]:
+        _cleanup_game(chat_id)
+        return
 
     winner = check_win(chat_id)
     if winner:
