@@ -1,4 +1,5 @@
 import asyncio
+import io
 import json
 import logging
 import os
@@ -43,6 +44,20 @@ except ImportError:
 from database import BotDatabase
 from vc_manager import VCManager
 from music_handlers import MusicHandlers
+
+# Keep all persistent files tied to this script directory so deploy/run cwd changes do not reset state.
+BASE_DIR: Final[Path] = Path(__file__).resolve().parent
+
+
+def _resolve_data_file(filename: str) -> Path:
+    target = BASE_DIR / filename
+    legacy = Path(filename)
+    try:
+        if not target.exists() and legacy.exists() and legacy.resolve() != target.resolve():
+            shutil.copy2(legacy, target)
+    except Exception:
+        pass
+    return target
 
 # ========================= CONFIGURATION ========================= #
 
@@ -113,7 +128,7 @@ def _is_admin_or_owner(user_id: int, chat_id: int) -> bool:
 # ========================= BROADCAST SYSTEM ========================= #
 
 # Enhanced user database structure
-USERS_DB_FILE: Final[Path] = Path("users_database.json")
+USERS_DB_FILE: Final[Path] = _resolve_data_file("users_database.json")
 
 def _load_users_database() -> Dict[int, Dict[str, Any]]:
     """Load detailed user database from JSON file
@@ -145,7 +160,7 @@ REGISTERED_USERS: Set[int] = set(USERS_DATABASE.keys())
 
 # ========================= OPT-OUT SYSTEM ========================= #
 
-OPTED_OUT_DB_FILE: Final[Path] = Path("opted_out_users.json")
+OPTED_OUT_DB_FILE: Final[Path] = _resolve_data_file("opted_out_users.json")
 
 def _load_opted_out_users() -> Set[int]:
     """Load opted-out user IDs from JSON file"""
@@ -174,7 +189,7 @@ LANGUAGE_PREFERENCES: Dict[int, str] = {}
 
 # ========================= GROUP SETTINGS SYSTEM ========================= #
 
-GROUP_SETTINGS_FILE: Final[Path] = Path("group_settings.json")
+GROUP_SETTINGS_FILE: Final[Path] = _resolve_data_file("group_settings.json")
 
 # Default group settings
 DEFAULT_GROUP_SETTINGS = {
@@ -241,7 +256,7 @@ SPAM_TRACKER: Dict[int, Dict[int, List[float]]] = {}
 
 # ========================= GROUP TRACKING SYSTEM ========================= #
 
-GROUPS_DB_FILE: Final[Path] = Path("groups_database.json")
+GROUPS_DB_FILE: Final[Path] = _resolve_data_file("groups_database.json")
 
 def _load_groups_database() -> Dict[int, Dict[str, Any]]:
     """Load detailed group database from JSON file
@@ -270,6 +285,72 @@ GROUPS_DATABASE: Dict[int, Dict[str, Any]] = _load_groups_database()
 
 # Legacy set for backward compatibility
 REGISTERED_GROUPS: Set[int] = set(GROUPS_DATABASE.keys())
+
+
+MANUAL_BROADCAST_FILE: Final[Path] = _resolve_data_file("broadcast_targets.json")
+
+
+def _load_manual_broadcast_targets() -> Tuple[Set[int], Set[int]]:
+    """Load manually configured broadcast targets: positive IDs are users, negative IDs are groups/channels."""
+    try:
+        if MANUAL_BROADCAST_FILE.exists():
+            with open(MANUAL_BROADCAST_FILE, "r") as f:
+                data = json.load(f)
+            users = {int(v) for v in data.get("users", [])}
+            groups = {int(v) for v in data.get("groups", [])}
+            return users, groups
+    except Exception as e:
+        print(f"[WARN] Could not load manual broadcast targets: {e}")
+    return set(), set()
+
+
+def _save_manual_broadcast_targets(user_ids: Set[int], group_ids: Set[int]) -> None:
+    try:
+        with open(MANUAL_BROADCAST_FILE, "w") as f:
+            json.dump(
+                {
+                    "users": sorted(int(v) for v in user_ids),
+                    "groups": sorted(int(v) for v in group_ids),
+                    "updated_at": time.time(),
+                },
+                f,
+                indent=2,
+            )
+    except Exception as e:
+        logger.error(f"Could not save manual broadcast targets: {e}")
+
+
+MANUAL_BROADCAST_USERS, MANUAL_BROADCAST_GROUPS = _load_manual_broadcast_targets()
+
+
+def _get_broadcast_targets() -> Tuple[Set[int], Set[int]]:
+    """Collect full recipient set from JSON + SQLite + manual IDs."""
+    db_users: Set[int] = set()
+    db_groups: Set[int] = set()
+    try:
+        users_from_db, groups_from_db = BOT_DB.get_recipient_ids()
+        db_users = set(users_from_db)
+        db_groups = set(groups_from_db)
+    except Exception as e:
+        logger.warning(f"Could not load recipients from sqlite: {e}")
+
+    user_targets = (
+        set(REGISTERED_USERS)
+        | set(int(v) for v in USERS_DATABASE.keys())
+        | db_users
+        | set(MANUAL_BROADCAST_USERS)
+    )
+    group_targets = (
+        set(REGISTERED_GROUPS)
+        | set(int(v) for v in GROUPS_DATABASE.keys())
+        | db_groups
+        | set(MANUAL_BROADCAST_GROUPS)
+    )
+
+    user_targets = {int(v) for v in user_targets if int(v) > 0}
+    group_targets = {int(v) for v in group_targets if int(v) < 0}
+    user_targets -= OPTED_OUT_USERS
+    return user_targets, group_targets
 
 
 def _remove_user_everywhere(user_id: int) -> None:
@@ -886,6 +967,121 @@ async def _send_log_to_channel(context: ContextTypes.DEFAULT_TYPE, text: str) ->
         logger.warning(f"Could not send log to channel {target}: {e}")
 
 
+def _log_target_chat_id() -> Any:
+    target = LOG_CHANNEL_ID if LOG_CHANNEL_ID else LOG_CHANNEL_USERNAME
+    return target if target else None
+
+
+def _detect_message_media_kind(message: Message) -> Optional[str]:
+    if not message:
+        return None
+    if message.sticker:
+        return "sticker"
+    if message.animation:
+        return "gif/animation"
+    if message.photo:
+        return "photo"
+    if message.video:
+        return "video"
+    if message.voice:
+        return "voice"
+    if message.audio:
+        return "audio"
+    if message.video_note:
+        return "video_note"
+    if message.document:
+        return "document"
+    return None
+
+
+async def _log_media_to_channel(
+    context: ContextTypes.DEFAULT_TYPE,
+    update: Update,
+    scope: str,
+) -> None:
+    """Log media metadata and copy original media message to log channel."""
+    if not ENABLE_USAGE_LOGS or not update or not update.message:
+        return
+
+    message = update.message
+    media_kind = _detect_message_media_kind(message)
+    if not media_kind:
+        return
+
+    target = _log_target_chat_id()
+    if not target:
+        return
+
+    user = update.effective_user
+    chat = update.effective_chat
+    caption = (message.caption or "").strip()
+    caption_short = caption[:300] if caption else "-"
+
+    meta_text = (
+        f"{scope}_MEDIA\n"
+        f"Type: {media_kind}\n"
+        f"Chat: {chat.title if chat and chat.title else 'Private Chat'}\n"
+        f"Chat ID: {chat.id if chat else 'None'}\n"
+        f"User: {_safe_user_mention(user.username if user else None, user.first_name if user else None)}\n"
+        f"User ID: {user.id if user else 'None'}\n"
+        f"Caption: {caption_short}\n"
+        f"At: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+    await _send_log_to_channel(context, meta_text)
+
+    try:
+        await context.bot.copy_message(
+            chat_id=target,
+            from_chat_id=message.chat_id,
+            message_id=message.message_id,
+        )
+    except Exception as e:
+        logger.warning(f"Could not copy media to log channel {target}: {e}")
+
+
+def _build_detailed_usage_dump() -> str:
+    users = BOT_DB.get_all_users()
+    users_sorted = sorted(users, key=lambda r: float(r.get("last_seen", 0) or 0), reverse=True)
+    group_items = sorted(
+        GROUPS_DATABASE.items(),
+        key=lambda kv: float((kv[1] or {}).get("last_active", 0) or 0),
+        reverse=True,
+    )
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    lines: list[str] = [
+        f"ANIMX DATA DUMP ({now})",
+        "",
+        f"Total Users: {len(users_sorted)}",
+        f"Total Groups: {len(group_items)}",
+        "",
+        "USERS",
+    ]
+    for idx, u in enumerate(users_sorted, 1):
+        uname = f"@{u.get('username')}" if u.get("username") else "None"
+        fname = u.get("first_name") or "Unknown"
+        uid = u.get("user_id")
+        msg_count = u.get("message_count", 0)
+        last_seen = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(u.get("last_seen", 0) or 0)))
+        lines.append(f"{idx}. {fname} | {uname} | ID:{uid} | msgs:{msg_count} | last:{last_seen}")
+
+    lines.extend(["", "GROUPS"])
+    for idx, (gid, g) in enumerate(group_items, 1):
+        title = g.get("title") or "Unknown Group"
+        gtype = g.get("type") or "group"
+        members = g.get("member_count", 0)
+        last_active = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(g.get("last_active", 0) or 0)))
+        lines.append(f"{idx}. {title} | ID:{gid} | type:{gtype} | members:{members} | last:{last_active}")
+
+    return "\n".join(lines)
+
+
+async def _send_usage_dump_file(context: ContextTypes.DEFAULT_TYPE, chat_id: Any) -> None:
+    content = _build_detailed_usage_dump().encode("utf-8", errors="ignore")
+    buff = io.BytesIO(content)
+    buff.name = f"animx_data_dump_{int(time.time())}.txt"
+    await context.bot.send_document(chat_id=chat_id, document=buff, caption="Full users/groups dump")
+
+
 async def _send_play_log_to_channel(
     context: ContextTypes.DEFAULT_TYPE,
     update: Update,
@@ -1015,10 +1211,14 @@ HELP_TEXT: Final[str] = (
     "\U0001F4E2 Owner Commands\n"
     "/broadcast <msg> - Broadcast text\n"
     "/broadcast_now - Broadcast replied content\n"
+    "/addid <chat_id> - Add manual broadcast target\n"
+    "/delid <chat_id> - Remove manual broadcast target\n"
+    "/listids - Show broadcast recipient totals\n"
     "/broadcastsong <name> - Broadcast a song\n"
     "/dashboard - Live analytics\n"
     "/channelstats - Send past/present usage report\n"
     "/reloadstyle - Reload chat export style data\n"
+    "/styledebug <text> - Preview style matches\n"
     "/users - List users\n"
     "/groups - List groups\n\n"
     "\u2699\uFE0F Voice Chat Notes\n"
@@ -1045,7 +1245,7 @@ logging.basicConfig(
 logger = logging.getLogger("ANIMX_CLAN_BOT")
 
 # Persistent SQLite tracker (users, groups, activity)
-BOT_DB = BotDatabase(Path("bot_data.db"))
+BOT_DB = BotDatabase(_resolve_data_file("bot_data.db"))
 VC_MANAGER: Optional[VCManager] = None
 VC_LOCK = asyncio.Lock()
 VC_ASSISTANT_PRESENT_CACHE: Dict[int, float] = {}
@@ -1055,6 +1255,8 @@ CHAT_STYLE_EXPORT_PROFILE: Dict[str, Any] = {
     "source_files": [],
     "example_pairs": [],
     "short_lines": [],
+    "reply_corpus": [],
+    "line_corpus": [],
     "sticker_paths": [],
     "gif_paths": [],
     "image_paths": [],
@@ -1080,8 +1282,16 @@ def _discover_chat_export_dirs() -> list[Path]:
                     seen.add(key)
                     dirs.append(candidate)
 
-    desktop_exports = Path.home() / "Downloads" / "Telegram Desktop"
-    if desktop_exports.exists():
+    default_scan_roots = [
+        Path.home() / "Downloads" / "Telegram Desktop",
+        Path("E:/Downloads/Telegram Desktop"),
+        Path("D:/Downloads/Telegram Desktop"),
+        Path("C:/Users/Public/Downloads/Telegram Desktop"),
+    ]
+
+    for desktop_exports in default_scan_roots:
+        if not desktop_exports.exists():
+            continue
         candidates = sorted(
             [p for p in desktop_exports.glob("ChatExport_*") if p.is_dir()],
             key=lambda p: p.stat().st_mtime,
@@ -1168,6 +1378,8 @@ def _build_chat_style_profile(export_dirs: list[Path]) -> Dict[str, Any]:
         "source_files": [str(p) for p in html_files],
         "example_pairs": [],
         "short_lines": [],
+        "reply_corpus": [],
+        "line_corpus": [],
         "sticker_paths": [],
         "gif_paths": [],
         "image_paths": [],
@@ -1308,6 +1520,8 @@ def _build_chat_style_profile(export_dirs: list[Path]) -> Dict[str, Any]:
 
     profile["example_pairs"] = dedup_pairs
     profile["short_lines"] = dedup_lines
+    profile["reply_corpus"] = [b for _, b in dedup_pairs if b]
+    profile["line_corpus"] = dedup_lines
     profile["sticker_paths"] = sorted(set(profile["sticker_paths"]))
     profile["gif_paths"] = sorted(set(profile["gif_paths"]))
     profile["image_paths"] = sorted(set(profile["image_paths"]))
@@ -1336,37 +1550,93 @@ def _load_chat_style_profile() -> None:
         logger.warning(f"Could not load chat export style profile: {e}")
 
 
-def _chat_style_prompt_suffix() -> str:
+def _tokenize_style_text(text: str) -> set[str]:
+    tokens = set(re.findall(r"[a-z0-9']+", (text or "").lower()))
+    if not tokens:
+        return set()
+    stop = {
+        "the", "a", "an", "is", "are", "am", "i", "you", "me", "my", "your",
+        "to", "and", "or", "of", "in", "on", "for", "it", "this", "that",
+        "hai", "haan", "h", "ho", "ki", "ka", "ke", "ko", "se", "me", "mai",
+    }
+    return {t for t in tokens if t not in stop and len(t) > 1}
+
+
+def _score_style_match(query: str, candidate: str) -> float:
+    q = _tokenize_style_text(query)
+    c = _tokenize_style_text(candidate)
+    if not q or not c:
+        return 0.0
+    overlap = len(q & c)
+    if overlap == 0:
+        return 0.0
+    return overlap / max(1, len(q))
+
+
+def _select_contextual_style_examples(user_message: str) -> tuple[list[tuple[str, str]], list[str]]:
+    pairs: list[tuple[str, str]] = CHAT_STYLE_EXPORT_PROFILE.get("example_pairs", [])
+    lines: list[str] = CHAT_STYLE_EXPORT_PROFILE.get("short_lines", [])
+    if not user_message.strip():
+        return pairs[-8:], lines[-12:]
+
+    scored_pairs: list[tuple[float, tuple[str, str]]] = []
+    for pair in pairs:
+        score = max(_score_style_match(user_message, pair[0]), _score_style_match(user_message, pair[1]))
+        if score > 0:
+            scored_pairs.append((score, pair))
+    scored_pairs.sort(key=lambda x: x[0], reverse=True)
+
+    selected_pairs = [p for _, p in scored_pairs[:8]]
+    if len(selected_pairs) < 4 and pairs:
+        fallback = pairs[-(8 - len(selected_pairs)) :]
+        for p in fallback:
+            if p not in selected_pairs:
+                selected_pairs.append(p)
+            if len(selected_pairs) >= 8:
+                break
+
+    scored_lines: list[tuple[float, str]] = []
+    for line in lines:
+        score = _score_style_match(user_message, line)
+        if score > 0:
+            scored_lines.append((score, line))
+    scored_lines.sort(key=lambda x: x[0], reverse=True)
+    selected_lines = [ln for _, ln in scored_lines[:12]]
+    if len(selected_lines) < 6 and lines:
+        for ln in lines[-12:]:
+            if ln not in selected_lines:
+                selected_lines.append(ln)
+            if len(selected_lines) >= 12:
+                break
+    return selected_pairs, selected_lines
+
+
+def _chat_style_prompt_suffix(user_message: str = "") -> str:
     pairs: list[tuple[str, str]] = CHAT_STYLE_EXPORT_PROFILE.get("example_pairs", [])
     lines: list[str] = CHAT_STYLE_EXPORT_PROFILE.get("short_lines", [])
     if not pairs and not lines:
         return ""
 
+    selected_pairs, selected_lines = _select_contextual_style_examples(user_message)
+    reply_corpus: list[str] = CHAT_STYLE_EXPORT_PROFILE.get("reply_corpus", [])
+    length_pool = reply_corpus if reply_corpus else [b for _, b in selected_pairs]
+    avg_len = int(sum(len(x.split()) for x in length_pool) / max(1, len(length_pool))) if length_pool else 14
+    avg_len = max(6, min(avg_len, 28))
+
     prompt_lines: list[str] = [
         "",
         "Real chat style to imitate (from exported group history):",
         "- Keep this same natural flow, brevity, and slang balance.",
+        f"- Typical reply length: around {avg_len} words.",
     ]
 
-    latest_pairs = pairs[-8:] if len(pairs) > 8 else pairs
-    random_pairs: list[tuple[str, str]] = []
-    if len(pairs) > 8:
-        pool = pairs[:-8]
-        random_pairs = random.sample(pool, k=min(4, len(pool)))
-
-    for u, a in (latest_pairs + random_pairs):
+    for u, a in selected_pairs[:8]:
         prompt_lines.append(f"User: {u}")
         prompt_lines.append(f"Reply style: {a}")
-    if lines:
+    if selected_lines:
         prompt_lines.append("Common short lines:")
-        latest_lines = lines[-14:] if len(lines) > 14 else lines
-        random_lines: list[str] = []
-        if len(lines) > 14:
-            pool = lines[:-14]
-            random_lines = random.sample(pool, k=min(6, len(pool)))
-        for line in (latest_lines + random_lines):
+        for line in selected_lines[:12]:
             prompt_lines.append(f"- {line}")
-
     return "\n".join(prompt_lines)
 
 
@@ -1479,10 +1749,10 @@ _load_chat_style_profile()
 
 # ========================= GEMINI AI HELPER ========================= #
 
-def _build_private_style_system_prompt(user_lang: str) -> str:
+def _build_private_style_system_prompt(user_lang: str, user_message: str = "") -> str:
     """Compose private DM style prompt with feminine/flirty steering."""
     base_prompt = PRIVATE_FLIRTY_PROMPT
-    style_suffix = _chat_style_prompt_suffix()
+    style_suffix = _chat_style_prompt_suffix(user_message)
     lang_instruction = f"\n[User language: {user_lang.upper()}]"
     if user_lang == "english":
         lang_instruction += " Reply ONLY in English."
@@ -1493,10 +1763,10 @@ def _build_private_style_system_prompt(user_lang: str) -> str:
     return base_prompt + style_suffix + lang_instruction
 
 
-def _build_group_style_system_prompt(user_lang: str) -> str:
+def _build_group_style_system_prompt(user_lang: str, user_message: str = "") -> str:
     """Compose group-style prompt with language steering."""
     base_prompt = MUSIC_HANDLERS.get_group_style_system_prompt()
-    style_suffix = _chat_style_prompt_suffix()
+    style_suffix = _chat_style_prompt_suffix(user_message)
     lang_instruction = f"\n[User language: {user_lang.upper()}]"
     if user_lang == "english":
         lang_instruction += " Reply ONLY in English."
@@ -2218,13 +2488,12 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     # Get message to broadcast
     broadcast_message = " ".join(context.args)
     
-    # Filter out opted-out users
-    active_users = REGISTERED_USERS - OPTED_OUT_USERS
+    active_users, all_groups = _get_broadcast_targets()
     
     # Send confirmation with user and group count
     total_users = len(active_users)
-    total_groups = len(REGISTERED_GROUPS)
-    opted_out_count = len(OPTED_OUT_USERS & REGISTERED_USERS)
+    total_groups = len(all_groups)
+    opted_out_count = len(OPTED_OUT_USERS)
     total_recipients = total_users + total_groups
     
     confirm_msg = await update.effective_message.reply_text(
@@ -2244,17 +2513,15 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     logger.info(f" Starting broadcast to {total_users} users and {total_groups} groups")
     
     # Send message to each active user (excluding opted-out)
-    for idx, user_broadcast_id in enumerate(active_users, 1):
+    for idx, user_broadcast_id in enumerate(sorted(active_users), 1):
         try:
             # Add delay between messages to avoid rate limiting
             if idx > 1:
                 await asyncio.sleep(0.3)
             
-            # Send message with Baby personality
             await context.bot.send_message(
                 chat_id=user_broadcast_id,
-                text=f" {broadcast_message}",
-                parse_mode=ParseMode.MARKDOWN,
+                text=broadcast_message,
             )
             sent_to_users += 1
             
@@ -2280,18 +2547,14 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 failed_users += 1
     
     # Send message to each group
-    for idx, group_id in enumerate(GROUPS_DATABASE.keys(), 1):
+    for idx, group_id in enumerate(sorted(all_groups), 1):
         try:
             # Add delay between messages to avoid rate limiting
             if idx > 1:
                 await asyncio.sleep(0.3)
             
             # Send message to group
-            await context.bot.send_message(
-                chat_id=group_id,
-                text=f" **BROADCAST FROM OWNER** \n\n {broadcast_message}",
-                parse_mode=ParseMode.MARKDOWN,
-            )
+            await context.bot.send_message(chat_id=group_id, text=broadcast_message)
             sent_to_groups += 1
             
         except Exception as e:
@@ -2361,13 +2624,13 @@ async def broadcast_content(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     
     replied_message = update.message.reply_to_message
     
-    # Get users and groups (excluding opted-out)
-    active_users = REGISTERED_USERS - OPTED_OUT_USERS
-    all_groups = list(GROUPS_DATABASE.keys())
+    # Get users and groups (excluding opted-out users)
+    active_users, all_groups_set = _get_broadcast_targets()
+    all_groups = sorted(all_groups_set)
     
     total_users = len(active_users)
     total_groups = len(all_groups)
-    opted_out_count = len(OPTED_OUT_USERS & REGISTERED_USERS)
+    opted_out_count = len(OPTED_OUT_USERS)
     
     # Show confirmation
     confirm_msg = await update.effective_message.reply_text(
@@ -2386,7 +2649,7 @@ async def broadcast_content(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     logger.info(f" Starting content broadcast to {total_users} users and {total_groups} groups")
     
     # Send content to each active user
-    for idx, user_broadcast_id in enumerate(active_users, 1):
+    for idx, user_broadcast_id in enumerate(sorted(active_users), 1):
         try:
             # Rate limiting
             if idx > 1:
@@ -2464,6 +2727,89 @@ async def broadcast_content(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         f"   Failed: {failed_groups}\n\n"
         f" Content successfully broadcasted!"
     )
+
+
+async def add_broadcast_id_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner command: add manual broadcast chat_id (user or group)."""
+    if update.effective_user.id != ADMIN_ID:
+        await update.effective_message.reply_text("Only owner can use this command.")
+        return
+
+    if not context.args:
+        await update.effective_message.reply_text(
+            "Usage: /addid <chat_id>\n"
+            "User ID positive hoti hai, group/channel ID negative hoti hai."
+        )
+        return
+
+    try:
+        chat_id = int(context.args[0].strip())
+    except Exception:
+        await update.effective_message.reply_text("Invalid chat_id. Example: /addid -1001234567890")
+        return
+
+    if chat_id < 0:
+        MANUAL_BROADCAST_GROUPS.add(chat_id)
+        target_label = "group/channel"
+    else:
+        MANUAL_BROADCAST_USERS.add(chat_id)
+        target_label = "user"
+
+    _save_manual_broadcast_targets(MANUAL_BROADCAST_USERS, MANUAL_BROADCAST_GROUPS)
+    await update.effective_message.reply_text(
+        f"Saved {target_label} ID: `{chat_id}`\n"
+        f"Manual list -> users: {len(MANUAL_BROADCAST_USERS)}, groups: {len(MANUAL_BROADCAST_GROUPS)}",
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+
+async def remove_broadcast_id_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner command: remove manual broadcast chat_id."""
+    if update.effective_user.id != ADMIN_ID:
+        await update.effective_message.reply_text("Only owner can use this command.")
+        return
+
+    if not context.args:
+        await update.effective_message.reply_text("Usage: /delid <chat_id>")
+        return
+
+    try:
+        chat_id = int(context.args[0].strip())
+    except Exception:
+        await update.effective_message.reply_text("Invalid chat_id.")
+        return
+
+    removed = False
+    if chat_id < 0 and chat_id in MANUAL_BROADCAST_GROUPS:
+        MANUAL_BROADCAST_GROUPS.discard(chat_id)
+        removed = True
+    if chat_id > 0 and chat_id in MANUAL_BROADCAST_USERS:
+        MANUAL_BROADCAST_USERS.discard(chat_id)
+        removed = True
+
+    if removed:
+        _save_manual_broadcast_targets(MANUAL_BROADCAST_USERS, MANUAL_BROADCAST_GROUPS)
+        await update.effective_message.reply_text(f"Removed ID: `{chat_id}`", parse_mode=ParseMode.MARKDOWN)
+    else:
+        await update.effective_message.reply_text("ID manual list me nahi mila.")
+
+
+async def list_broadcast_ids_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner command: show manual + auto recipient totals."""
+    if update.effective_user.id != ADMIN_ID:
+        await update.effective_message.reply_text("Only owner can use this command.")
+        return
+
+    users, groups = _get_broadcast_targets()
+    text = (
+        "Broadcast Recipients\n\n"
+        f"Total users: {len(users)}\n"
+        f"Total groups: {len(groups)}\n"
+        f"Manual users: {len(MANUAL_BROADCAST_USERS)}\n"
+        f"Manual groups: {len(MANUAL_BROADCAST_GROUPS)}\n"
+        f"Opted-out users: {len(OPTED_OUT_USERS)}"
+    )
+    await update.effective_message.reply_text(text)
 
 
 # ========================= SONG DOWNLOAD COMMANDS ========================= #
@@ -4893,6 +5239,56 @@ async def reloadstyle_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.effective_message.reply_text(summary)
 
 
+async def styledebug_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner command: show which style samples are being selected for a given input."""
+    if not update.effective_user or update.effective_user.id != ADMIN_ID:
+        await update.effective_message.reply_text("Only owner can use this command.")
+        return
+
+    query = " ".join(context.args).strip() if context.args else ""
+    if not query and update.message and update.message.reply_to_message:
+        query = (update.message.reply_to_message.text or update.message.reply_to_message.caption or "").strip()
+
+    if not query:
+        await update.effective_message.reply_text(
+            "Usage:\n/styledebug <text>\nOR reply to a message with /styledebug"
+        )
+        return
+
+    pairs, lines = _select_contextual_style_examples(query)
+    prompt_suffix = _chat_style_prompt_suffix(query)
+    preview_pairs = pairs[:5]
+    preview_lines = lines[:8]
+
+    out_lines = [
+        "Style Debug",
+        f"Input: {query[:180]}",
+        "",
+        f"Selected Pairs: {len(pairs)}",
+        f"Selected Lines: {len(lines)}",
+        f"Prompt Suffix Size: {len(prompt_suffix)} chars",
+        "",
+        "Top Pair Matches:",
+    ]
+
+    if not preview_pairs:
+        out_lines.append("- none")
+    else:
+        for idx, (u, a) in enumerate(preview_pairs, 1):
+            out_lines.append(f"{idx}. U: {u[:90]}")
+            out_lines.append(f"   R: {a[:90]}")
+
+    out_lines.append("")
+    out_lines.append("Top Line Matches:")
+    if not preview_lines:
+        out_lines.append("- none")
+    else:
+        for idx, line in enumerate(preview_lines, 1):
+            out_lines.append(f"{idx}. {line[:110]}")
+
+    await update.effective_message.reply_text("\n".join(out_lines))
+
+
 async def broadcastsong_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Owner command: download one song and broadcast to all users + groups."""
     if update.effective_user.id != ADMIN_ID:
@@ -4941,7 +5337,6 @@ async def broadcastsong_command(update: Update, context: ContextTypes.DEFAULT_TY
                 title=metadata.get("title", audio_file.stem[:100]),
                 performer=metadata.get("performer", "Unknown Artist"),
                 duration=metadata.get("duration"),
-                caption="Broadcast seed message",
             )
         if seed_message and seed_message.audio:
             file_id = seed_message.audio.file_id
@@ -4986,7 +5381,6 @@ async def broadcastsong_command(update: Update, context: ContextTypes.DEFAULT_TY
                         title=metadata.get("title", audio_file.stem[:100]),
                         performer=metadata.get("performer", "Unknown Artist"),
                         duration=metadata.get("duration"),
-                        caption="Owner music broadcast",
                     )
                 else:
                     with open(audio_file, "rb") as f:
@@ -4996,7 +5390,6 @@ async def broadcastsong_command(update: Update, context: ContextTypes.DEFAULT_TY
                             title=metadata.get("title", audio_file.stem[:100]),
                             performer=metadata.get("performer", "Unknown Artist"),
                             duration=metadata.get("duration"),
-                            caption="Owner music broadcast",
                         )
                 sent_groups += 1
             except Exception as e:
@@ -5061,6 +5454,18 @@ async def channelstats_command(update: Update, context: ContextTypes.DEFAULT_TYP
     report = _build_channel_stats_report()
     await _send_log_to_channel(context, report)
     await update.effective_message.reply_text(report)
+
+    target = _log_target_chat_id()
+    if target:
+        try:
+            await _send_usage_dump_file(context, target)
+        except Exception as e:
+            logger.warning(f"Could not send usage dump to log channel: {e}")
+
+    try:
+        await _send_usage_dump_file(context, update.effective_chat.id)
+    except Exception as e:
+        logger.warning(f"Could not send usage dump to requester chat: {e}")
 
 
 def _format_vc_duration(seconds: Optional[int]) -> str:
@@ -6077,7 +6482,7 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
             BOT_DB.add_chat_memory(user_id, update.effective_chat.id, "assistant", f"[sent {explicit_media}]")
             return
 
-    system_prompt_with_lang = _build_private_style_system_prompt(user_lang)
+    system_prompt_with_lang = _build_private_style_system_prompt(user_lang, user_message)
     history = _build_memory_messages(user_id, update.effective_chat.id, limit=10)
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
@@ -6093,6 +6498,57 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
     BOT_DB.add_chat_memory(user_id, update.effective_chat.id, "assistant", ai_response)
     await update.message.reply_text(ai_response)
     await _maybe_send_reaction_media(update, user_message)
+
+
+async def handle_private_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Track + log private media messages (photo/gif/sticker/etc)."""
+    if not update.message or not update.effective_user:
+        return
+    await _register_user_from_update(update)
+    media_kind = _detect_message_media_kind(update.message)
+    if not media_kind:
+        return
+    BOT_DB.log_activity(
+        "private_media",
+        user_id=update.effective_user.id,
+        metadata={
+            "type": media_kind,
+            "caption": (update.message.caption or "")[:300],
+        },
+    )
+    await _log_media_to_channel(context, update, "PRIVATE")
+
+
+async def handle_group_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Track + log group media messages (photo/gif/sticker/etc)."""
+    if not update.message or not update.effective_user or not update.effective_chat:
+        return
+    if update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        return
+
+    await _register_user(update.effective_user.id, update.effective_user.username, update.effective_user.first_name)
+    await _register_group(update.effective_chat.id, update.effective_chat)
+    await _register_group_member(
+        update.effective_chat.id,
+        update.effective_user.id,
+        update.effective_user.username,
+        update.effective_user.first_name,
+    )
+
+    media_kind = _detect_message_media_kind(update.message)
+    if not media_kind:
+        return
+
+    BOT_DB.log_activity(
+        "group_media",
+        user_id=update.effective_user.id,
+        group_id=update.effective_chat.id,
+        metadata={
+            "type": media_kind,
+            "caption": (update.message.caption or "")[:300],
+        },
+    )
+    await _log_media_to_channel(context, update, "GROUP")
 
 async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle group messages - ONLY reply when specifically triggered"""
@@ -6253,7 +6709,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         user_lang = LANGUAGE_PREFERENCES.get(user_id) or BOT_DB.get_user_language(user_id)
         if user_lang not in {"english", "hinglish", "auto"}:
             user_lang = "auto"
-        system_prompt_with_lang = _build_group_style_system_prompt(user_lang)
+        system_prompt_with_lang = _build_group_style_system_prompt(user_lang, message_text)
         # Tool-intent short-circuit for group AI triggers
         intent = _detect_intent(message_text)
         tool_reply = await _handle_tool_intent(intent, message_text, user_id, group_id)
@@ -6697,9 +7153,13 @@ def _default_bot_commands() -> list[BotCommand]:
         BotCommand("resetwarn", "Reset user warnings"),
         BotCommand("broadcast", "Broadcast text (owner)"),
         BotCommand("broadcast_now", "Broadcast replied content (owner)"),
+        BotCommand("addid", "Add manual broadcast chat_id (owner)"),
+        BotCommand("delid", "Remove manual broadcast chat_id (owner)"),
+        BotCommand("listids", "Show broadcast recipient totals (owner)"),
         BotCommand("broadcastsong", "Broadcast song (owner)"),
         BotCommand("dashboard", "Show analytics (owner)"),
         BotCommand("channelstats", "Send usage report (owner)"),
+        BotCommand("styledebug", "Preview style match selection (owner)"),
         BotCommand("buildinfo", "Show runtime build info (owner)"),
         BotCommand("users", "List users (owner)"),
         BotCommand("groups", "List groups (owner)"),
@@ -6826,6 +7286,7 @@ def main() -> None:
     application.add_handler(CommandHandler("dashboard", dashboard_command))
     application.add_handler(CommandHandler("channelstats", channelstats_command))
     application.add_handler(CommandHandler("reloadstyle", reloadstyle_command))
+    application.add_handler(CommandHandler("styledebug", styledebug_command))
     application.add_handler(CommandHandler("buildinfo", buildinfo_command))
     application.add_handler(CommandHandler("chatid", chatid_command))
     
@@ -6843,6 +7304,9 @@ def main() -> None:
     # Broadcast command (admin only)
     application.add_handler(CommandHandler("broadcast", broadcast_command))
     application.add_handler(CommandHandler("broadcast_now", broadcast_content))
+    application.add_handler(CommandHandler("addid", add_broadcast_id_command))
+    application.add_handler(CommandHandler("delid", remove_broadcast_id_command))
+    application.add_handler(CommandHandler("listids", list_broadcast_ids_command))
     application.add_handler(CommandHandler("broadcastsong", broadcastsong_command))
     
     # Tagging commands
@@ -6969,6 +7433,14 @@ def main() -> None:
             handle_private_message,
         )
     )
+    application.add_handler(
+        MessageHandler(
+            (filters.PHOTO | filters.Sticker.ALL | filters.ANIMATION | filters.VIDEO | filters.Document.ALL | filters.VOICE | filters.AUDIO | filters.VIDEO_NOTE)
+            & ~filters.COMMAND
+            & filters.ChatType.PRIVATE,
+            handle_private_media,
+        )
+    )
     
     # Group messages - @all mention handler (higher priority - checks for @all first)
     application.add_handler(
@@ -6983,6 +7455,14 @@ def main() -> None:
         MessageHandler(
             filters.TEXT & ~filters.COMMAND & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
             handle_group_message,
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            (filters.PHOTO | filters.Sticker.ALL | filters.ANIMATION | filters.VIDEO | filters.Document.ALL | filters.VOICE | filters.AUDIO | filters.VIDEO_NOTE)
+            & ~filters.COMMAND
+            & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
+            handle_group_media,
         )
     )
     
