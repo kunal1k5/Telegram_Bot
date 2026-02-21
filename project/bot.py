@@ -26,6 +26,10 @@ from game.mafia_engine import (
     start_join_timer,
 )
 from game.shop import buy
+try:
+    from start_card import create_start_card
+except Exception:
+    create_start_card = None
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 BOT_USERNAME = os.getenv("BOT_USERNAME", "YOUR_BOT_USERNAME").strip("@")
@@ -138,31 +142,32 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = start_panel_text(user)
     keyboard = build_start_keyboard(bot_username)
 
-    if START_PANEL_PHOTO_FILE_ID:
-        await update.message.reply_photo(
-            photo=START_PANEL_PHOTO_FILE_ID,
-            caption=text,
-            reply_markup=keyboard,
-        )
-        return
-
-    if START_PANEL_PHOTO_URL:
-        await update.message.reply_photo(
-            photo=START_PANEL_PHOTO_URL,
-            caption=text,
-            reply_markup=keyboard,
-        )
-        return
-
-    banner_path = Path(START_BANNER_PATH)
-    if banner_path.exists():
-        with banner_path.open("rb") as f:
-            await update.message.reply_photo(
-                photo=f,
-                caption=text,
-                reply_markup=keyboard,
-            )
-        return
+    # Send premium start image first (if available), then send panel text + buttons.
+    try:
+        if START_PANEL_PHOTO_FILE_ID:
+            await update.message.reply_photo(photo=START_PANEL_PHOTO_FILE_ID)
+        elif START_PANEL_PHOTO_URL:
+            await update.message.reply_photo(photo=START_PANEL_PHOTO_URL)
+        else:
+            banner_path = Path(START_BANNER_PATH)
+            if not banner_path.is_absolute():
+                root_banner = Path(__file__).resolve().parent.parent / banner_path
+                if root_banner.exists():
+                    banner_path = root_banner
+            if banner_path.exists() and create_start_card:
+                profile_url = ""
+                photos = await context.bot.get_user_profile_photos(update.effective_user.id, limit=1)
+                if photos.photos:
+                    file_id = photos.photos[0][-1].file_id
+                    pf = await context.bot.get_file(file_id)
+                    profile_url = pf.file_path or ""
+                card = create_start_card(str(banner_path), user, profile_url)
+                await update.message.reply_photo(photo=card)
+            elif banner_path.exists():
+                with banner_path.open("rb") as f:
+                    await update.message.reply_photo(photo=f)
+    except Exception:
+        pass
 
     await update.message.reply_text(text, reply_markup=keyboard)
 
