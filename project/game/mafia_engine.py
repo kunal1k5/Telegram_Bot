@@ -36,6 +36,13 @@ def _cleanup_game(chat_id: int) -> None:
     active_games.pop(chat_id, None)
 
 
+def cancel_game(chat_id: int) -> bool:
+    if chat_id not in active_games:
+        return False
+    _cleanup_game(chat_id)
+    return True
+
+
 def create_game(chat_id: int, join_time: int = DEFAULT_JOIN_TIME) -> None:
     old_game = active_games.get(chat_id)
     if old_game and old_game.get("join_task"):

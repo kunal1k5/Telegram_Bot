@@ -2,9 +2,9 @@ from game.economy import add, balance
 from game.inventory import add_item
 
 SHOP_ITEMS = {
-    "shield": 80,
-    "extralife": 100,
-    "doublevote": 90,
+    "shield": 30,
+    "doublevote": 40,
+    "extralife": 50,
     "reveal": 120,
 }
 
