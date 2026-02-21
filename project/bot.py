@@ -251,6 +251,62 @@ async def mafia_guide(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
+async def help_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = (
+        "📖 HELP PANEL\n\n"
+        "Main Commands:\n"
+        "• /mafia [seconds] - Create mafia lobby in group\n"
+        "• /join - Join active mafia lobby\n"
+        "• /extend - Extend join timer (+30s)\n"
+        "• /forcestart - Force start (admin)\n"
+        "• /myrole - Show your current role\n"
+        "• /buy <item> - Buy lifeline\n"
+        "• /leaderboard - Show top players\n"
+        "• /buildinfo - Show deployed commit\n\n"
+        "Quick Flow:\n"
+        "Start panel -> Mafia Hub -> Start Game -> Join -> Night/Day phases"
+    )
+    keyboard = [
+        [InlineKeyboardButton("🎮 Mafia Hub", callback_data="mafia_hub")],
+        [InlineKeyboardButton("🎤 VC Guide", callback_data="vcguide")],
+        [InlineKeyboardButton("⚙ Settings", callback_data="settings")],
+        [InlineKeyboardButton("🔙 Back", callback_data="back_start")],
+    ]
+    await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def vcguide_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = (
+        "🎤 VC GUIDE\n\n"
+        "This module is focused on Mafia game mode.\n\n"
+        "If you run the full ANIMX root bot, VC commands are:\n"
+        "/play, /queue, /skip, /vplay, /vqueue, /vskip, /vstop"
+    )
+    keyboard = [
+        [InlineKeyboardButton("📖 Help", callback_data="help")],
+        [InlineKeyboardButton("🔙 Back", callback_data="back_start")],
+    ]
+    await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def settings_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = (
+        "⚙ SETTINGS\n\n"
+        "Current module settings are environment based.\n\n"
+        "Required env:\n"
+        "• BOT_TOKEN\n"
+        "• BOT_USERNAME\n"
+        "• CHANNEL_USERNAME\n"
+        "• CONTACT_USERNAME\n\n"
+        "Use /buildinfo to verify current deployment commit."
+    )
+    keyboard = [
+        [InlineKeyboardButton("📖 Help", callback_data="help")],
+        [InlineKeyboardButton("🔙 Back", callback_data="back_start")],
+    ]
+    await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+
 async def mafia_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     join_time = 60
@@ -433,11 +489,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             reply_markup=build_mafia_shop_keyboard(),
         )
         return
-    if data in {"help", "vcguide", "settings"}:
-        await q.edit_message_text(
-            "This panel is under setup.",
-            reply_markup=build_start_keyboard(context.bot.username),
-        )
+    if data == "help":
+        await help_panel(update, context)
+        return
+    if data == "vcguide":
+        await vcguide_panel(update, context)
+        return
+    if data == "settings":
+        await settings_panel(update, context)
         return
 
     try:
