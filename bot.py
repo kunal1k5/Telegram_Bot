@@ -1843,8 +1843,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             # Send message with Baby personality
             await context.bot.send_message(
                 chat_id=user_broadcast_id,
-                text=f" {broadcast_message}",
-                parse_mode=ParseMode.MARKDOWN,
+                text=broadcast_message,
             )
             sent_to_users += 1
             
@@ -1879,8 +1878,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             # Send message to group
             await context.bot.send_message(
                 chat_id=group_id,
-                text=f" **BROADCAST FROM OWNER** \n\n {broadcast_message}",
-                parse_mode=ParseMode.MARKDOWN,
+                text=broadcast_message,
             )
             sent_to_groups += 1
             
