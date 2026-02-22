@@ -19,7 +19,10 @@ from typing import Final, Dict, List, Tuple, Optional, Set, Any
 random.seed()
 
 import httpx
-from google import genai
+try:
+    from google import genai
+except Exception:  # pragma: no cover - optional dependency in some deploy environments
+    genai = None
 from telegram import Bot, BotCommand, CallbackQuery, Message, Update, InlineKeyboardButton, InlineKeyboardMarkup, Chat, ChatPermissions
 from telegram.constants import ChatType, ParseMode, ChatMemberStatus
 from telegram.request import HTTPXRequest
@@ -95,11 +98,15 @@ if not OPENROUTER_API_KEY and not OPENAI_API_KEY and not GEMINI_API_KEY:
         "No AI API key set (OPENROUTER/OpenAI/GEMINI). AI chat quality will be limited."
     )
 
-# Gemini is no longer used - using OpenRouter only
-# GEMINI_CLIENT: Optional[genai.Client] = None
-# if GEMINI_API_KEY:
-#     GEMINI_CLIENT = genai.Client(api_key=GEMINI_API_KEY)
-GEMINI_CLIENT: Optional[genai.Client] = None
+# Gemini is optional fallback; keep startup safe when package is missing.
+GEMINI_CLIENT: Optional[Any] = None
+if GEMINI_API_KEY and genai is not None:
+    try:
+        GEMINI_CLIENT = genai.Client(api_key=GEMINI_API_KEY)
+    except Exception as exc:
+        logging.getLogger("ANIMX_CLAN_BOT").warning(
+            "Gemini client init failed; fallback disabled: %s", exc
+        )
 
 # Model fallback order (most stable first)
 GEMINI_MODELS: Final[list[str]] = [
