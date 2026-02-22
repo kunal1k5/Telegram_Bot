@@ -36,7 +36,7 @@ from game.mafia_engine import (
     start_game,
     start_join_timer,
 )
-from game.shop import buy
+from game.shop import SHOP_ITEMS, buy
 ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
@@ -414,9 +414,9 @@ async def mafia_shop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     text = (
         "MAFIA SHOP\n\n"
         f"Coins: {coins}\n\n"
-        "Shield - 30 coins\n"
-        "Double Vote - 40 coins\n"
-        "Extra Life - 50 coins"
+        f"Shield - {SHOP_ITEMS['shield']} coins\n"
+        f"Double Vote - {SHOP_ITEMS['doublevote']} coins\n"
+        f"Extra Life - {SHOP_ITEMS['extralife']} coins"
     )
     await update.callback_query.edit_message_text(text, reply_markup=build_mafia_shop_keyboard())
 
