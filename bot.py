@@ -8,6 +8,7 @@ import time
 import subprocess
 import shutil
 import re
+import html
 import ast
 import operator
 import sys
@@ -939,6 +940,83 @@ def _safe_user_mention(username: Optional[str], first_name: Optional[str]) -> st
     return first_name or "Unknown"
 
 
+def _message_media_type(message: Optional[Message]) -> Optional[str]:
+    if not message:
+        return None
+    if message.sticker:
+        return "sticker"
+    if message.animation:
+        return "gif"
+    if message.photo:
+        return "photo"
+    if message.video:
+        return "video"
+    if message.voice:
+        return "voice"
+    if message.audio:
+        return "audio"
+    if message.document:
+        mime_type = (message.document.mime_type or "").lower()
+        if mime_type == "image/gif":
+            return "gif"
+        return "document"
+    return None
+
+
+def _normalize_incoming_message_text(message: Optional[Message]) -> str:
+    if not message:
+        return ""
+
+    if message.text:
+        return message.text.strip()
+
+    caption = (message.caption or "").strip()
+    media_type = _message_media_type(message)
+    if not media_type:
+        return caption
+
+    if media_type == "sticker" and message.sticker and message.sticker.emoji:
+        base = f"[sticker {message.sticker.emoji}]"
+    else:
+        base = f"[{media_type}]"
+
+    return f"{base} {caption}".strip() if caption else base
+
+
+def _is_non_text_media_message(message: Optional[Message]) -> bool:
+    return bool(message and not message.text and _message_media_type(message))
+
+
+def _format_tagged_group_reply(user: Optional[Any], text: str) -> tuple[str, ParseMode]:
+    safe_text = html.escape((text or "").strip() or "...")
+    if not user:
+        return safe_text, ParseMode.HTML
+
+    if getattr(user, "username", None):
+        mention = f"@{html.escape(user.username)}"
+    else:
+        first_name = html.escape(getattr(user, "first_name", None) or "User")
+        mention = f'<a href="tg://user?id={user.id}">{first_name}</a>'
+    return f"{mention} {safe_text}".strip(), ParseMode.HTML
+
+
+async def _copy_message_to_log_channel(context: ContextTypes.DEFAULT_TYPE, message: Optional[Message]) -> None:
+    """Copy incoming message (including media) to log channel when enabled."""
+    if not ENABLE_USAGE_LOGS or not message:
+        return
+    target = LOG_CHANNEL_ID if LOG_CHANNEL_ID else LOG_CHANNEL_USERNAME
+    if not target:
+        return
+    try:
+        await context.bot.copy_message(
+            chat_id=target,
+            from_chat_id=message.chat_id,
+            message_id=message.message_id,
+        )
+    except Exception as e:
+        logger.warning(f"Could not copy message to channel {target}: {e}")
+
+
 async def _send_log_to_channel(context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
     """Send logs to channel silently. Requires bot as admin in the channel."""
     if not ENABLE_USAGE_LOGS:
@@ -989,34 +1067,34 @@ async def _send_play_log_to_channel(
 
 # Gemini AI personality system prompt
 SYSTEM_PROMPT: Final[str] = """
-You are Baby, a warm and playful chat companion.
+You are Baby, a warm and natural chat companion.
 
 Core behavior:
-- Mirror the user's tone, mood, and energy.
-- Reply naturally like a close friend, not like a formal assistant.
-- Keep context across messages and continue the same thread.
-- Use short, conversational replies in groups; slightly deeper replies in private chat.
-- Be supportive when users are sad/angry, playful when users tease/flirt, and excited when users are excited.
-- You can use Hinglish naturally when user speaks Hindi/Hinglish.
+- Talk like a real close friend: relaxed, human, and emotionally aware.
+- Mirror user tone, pace, and language naturally.
+- Keep context from recent turns and continue the same thread.
+- In groups keep replies concise; in private chat you can be more detailed.
 
-Style rules:
-- Avoid robotic wording, long lectures, and generic bullet dumps.
-- Do not say you are an AI, model, or bot in normal conversation.
-- Keep replies human, casual, and emotionally aware.
-- Use emojis naturally (1-3 max): heart, smile, wink, fire, hug, sparkle.
+Human-like style:
+- Use conversational phrasing, contractions, and natural flow.
+- Avoid robotic wording, generic lectures, and repetitive templates.
+- Do not mention being an AI/model/bot in normal conversation.
+- Keep replies clear and warm, with light emoji use (0-2).
 
-Safety rules:
-- No explicit sexual descriptions.
-- No hate, threats, or harmful guidance.
-- If topic is sensitive, stay kind and de-escalating.
+Mood behavior:
+- If user is sad: comfort first, then gentle encouragement.
+- If user is angry: acknowledge frustration, stay calm, never escalate.
+- If user is romantic/flirty: be sweet and classy, never explicit.
+- If user is happy/excited: match energy and keep vibe upbeat.
+- If user is confused/stressed: simplify and reassure step by step.
 
-Examples:
-- Flirty user -> playful and classy response.
-- Sad user -> comforting and gentle response.
-- Teasing user -> witty comeback, light tone.
+Safety:
+- No hate, threats, harassment, or harmful advice.
+- No explicit sexual content.
+- If topic is sensitive, be kind and de-escalating.
 
 Golden rule:
-Make the user feel heard, respected, and engaged.
+Make the user feel heard, respected, and genuinely engaged.
 """
 # Start message
 START_TEXT: Final[str] = (
@@ -1467,6 +1545,105 @@ def _detect_intent(text: str) -> str:
     if t.startswith(("calc ", "/calc ")):
         return "calc"
     return "chat"
+
+
+MOOD_KEYWORDS: Dict[str, tuple[str, ...]] = {
+    "angry": (
+        "angry", "mad", "furious", "annoyed", "irritated", "hate this", "fed up",
+        "gussa", "gusse", "chidh", "bakwaas", "faltu",
+    ),
+    "sad": (
+        "sad", "upset", "hurt", "cry", "depressed", "lonely", "broken",
+        "dukhi", "udaas", "rona", "akela", "dil toot", "heartbroken",
+    ),
+    "romantic": (
+        "love you", "miss you", "romantic", "date", "flirt", "crush",
+        "pyar", "pyaar", "jaan", "meri jaan", "i like you",
+    ),
+    "happy": (
+        "happy", "excited", "awesome", "great", "amazing", "yay",
+        "khush", "mast", "badiya", "bahut accha", "bohot accha", "nice",
+    ),
+    "anxious": (
+        "anxious", "worried", "nervous", "panic", "stressed", "stress", "tension",
+        "dar lag", "ghabra", "pareshan",
+    ),
+    "confused": (
+        "confused", "not sure", "dont know", "don't know", "stuck", "how to",
+        "samajh nahi", "samjh nahi", "kya karu", "kaise",
+    ),
+}
+
+
+def _normalize_language_preference(value: Optional[str]) -> str:
+    if value in {"english", "hinglish", "auto"}:
+        return value
+    return "auto"
+
+
+def _detect_message_mood(text: str) -> str:
+    t = (text or "").strip().lower()
+    if not t:
+        return "neutral"
+
+    scores = {mood: 0 for mood in MOOD_KEYWORDS.keys()}
+    for mood, words in MOOD_KEYWORDS.items():
+        for word in words:
+            if word in t:
+                scores[mood] += 1
+
+    if "!!" in t:
+        scores["happy"] += 1
+    if any(x in t for x in ("i hate", "so angry", "bohot gussa", "bahut gussa")):
+        scores["angry"] += 2
+    if any(x in t for x in ("i am sad", "feeling low", "mood off", "bohot udaas", "bahut udaas")):
+        scores["sad"] += 2
+    if any(x in t for x in ("i love you", "miss u", "miss you badly")):
+        scores["romantic"] += 2
+
+    priority = ["angry", "sad", "anxious", "romantic", "happy", "confused"]
+    best_mood = "neutral"
+    best_score = 0
+    for mood in priority:
+        score = scores.get(mood, 0)
+        if score > best_score:
+            best_mood = mood
+            best_score = score
+    return best_mood
+
+
+def _mood_style_instruction(mood: str, is_group: bool) -> str:
+    short_rule = "Keep it short (1-2 lines)." if is_group else "You can reply in 2-5 lines if needed."
+    mood_rules = {
+        "angry": "Acknowledge feelings first, stay calm, validate frustration, then guide softly.",
+        "sad": "Be gentle and supportive. Comfort first, then offer hopeful practical direction.",
+        "romantic": "Be sweet and playful, but classy and non-explicit.",
+        "happy": "Match the positive energy with upbeat and lively tone.",
+        "anxious": "Use reassuring and grounding tone. Break response into simple next steps.",
+        "confused": "Clarify simply with direct, practical wording and no jargon.",
+        "neutral": "Keep it friendly, natural, and conversational.",
+    }
+    return f"{mood_rules.get(mood, mood_rules['neutral'])} {short_rule}"
+
+
+def _build_chat_system_prompt(user_message: str, user_lang: Optional[str], is_group: bool) -> str:
+    lang = _normalize_language_preference(user_lang)
+    mood = _detect_message_mood(user_message)
+
+    if lang == "english":
+        lang_instruction = "Reply only in English."
+    elif lang == "hinglish":
+        lang_instruction = "Reply in natural Hinglish (Hindi + English mix)."
+    else:
+        lang_instruction = "Reply in the same language style used by the user."
+
+    mood_instruction = _mood_style_instruction(mood, is_group=is_group)
+    return (
+        f"{SYSTEM_PROMPT}\n\n"
+        f"Current user mood: {mood}\n"
+        f"Mood style instruction: {mood_instruction}\n"
+        f"Language instruction: {lang_instruction}"
+    )
 
 
 def _build_memory_messages(user_id: int, chat_id: int, limit: int = 10) -> list[dict[str, str]]:
@@ -5842,15 +6019,19 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
     user_id = update.effective_user.id
     await _register_user(user_id)
 
-    if not update.message or not update.message.text:
+    if not update.message:
         return
 
-    user_message = update.message.text.strip()
+    user_message = _normalize_incoming_message_text(update.message)
+    if not user_message:
+        return
+
     user_name = update.effective_user.first_name or "User"
     message_lower = user_message.lower()
+    media_type = _message_media_type(update.message)
 
     # Music quick trigger
-    if message_lower.startswith("play ") and len(message_lower) > 5:
+    if update.message.text and message_lower.startswith("play ") and len(message_lower) > 5:
         song_name = user_message[5:].strip()
         if song_name:
             context.args = song_name.split()
@@ -5858,17 +6039,24 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
             return
 
     logger.info(f"Private message from {user_name}: {user_message}")
-    BOT_DB.log_activity("private_message", user_id=user_id, metadata={"text": user_message[:200]})
+    BOT_DB.log_activity(
+        "private_message",
+        user_id=user_id,
+        metadata={"text": user_message[:200], "media_type": media_type or "text"},
+    )
     await _send_log_to_channel(
         context,
         (
             "PRIVATE_USE\n"
             f"User: {_safe_user_mention(update.effective_user.username, update.effective_user.first_name)}\n"
             f"User ID: {user_id}\n"
+            f"Type: {media_type or 'text'}\n"
             f"Message: {user_message[:300]}\n"
             f"At: {time.strftime('%Y-%m-%d %H:%M:%S')}"
         ),
     )
+    if _is_non_text_media_message(update.message):
+        await _copy_message_to_log_channel(context, update.message)
 
     # Language preference (persistent)
     if "english me bolo" in message_lower or "speak in english" in message_lower:
@@ -5878,9 +6066,9 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
         LANGUAGE_PREFERENCES[user_id] = "hinglish"
         BOT_DB.set_user_language(user_id, "hinglish")
 
-    user_lang = LANGUAGE_PREFERENCES.get(user_id) or BOT_DB.get_user_language(user_id)
-    if user_lang not in {"english", "hinglish", "auto"}:
-        user_lang = "auto"
+    user_lang = _normalize_language_preference(
+        LANGUAGE_PREFERENCES.get(user_id) or BOT_DB.get_user_language(user_id)
+    )
 
     intent = _detect_intent(user_message)
     tool_reply = await _handle_tool_intent(intent, user_message, user_id, update.effective_chat.id)
@@ -5890,15 +6078,11 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(tool_reply)
         return
 
-    lang_instruction = f"\nUSER LANGUAGE PREFERENCE: {user_lang.upper()}"
-    if user_lang == "english":
-        lang_instruction += "\nReply ONLY in English."
-    elif user_lang == "hinglish":
-        lang_instruction += "\nReply in Hinglish (mix of Hindi and English)."
-    else:
-        lang_instruction += "\nReply in the same language used by the user message."
-
-    system_prompt_with_lang = SYSTEM_PROMPT + lang_instruction
+    system_prompt_with_lang = _build_chat_system_prompt(
+        user_message,
+        user_lang=user_lang,
+        is_group=False,
+    )
     history = _build_memory_messages(user_id, update.effective_chat.id, limit=10)
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
@@ -5919,11 +6103,12 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         if not update.message:
             return
-            
-        if not update.message.text:
+
+        message_text = _normalize_incoming_message_text(update.message)
+        if not message_text:
             return
-        
-        message_text = update.message.text
+
+        media_type = _message_media_type(update.message)
         user_name = update.effective_user.first_name or "Unknown"
         chat_title = update.effective_chat.title or "Unknown Group"
         
@@ -5968,7 +6153,12 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             if matched_filter:
                 await update.effective_message.reply_text(matched_filter.get("response") or "")
                 return
-        BOT_DB.log_activity("group_message", user_id=user_id, group_id=group_id, metadata={"text": message_text[:200]})
+        BOT_DB.log_activity(
+            "group_message",
+            user_id=user_id,
+            group_id=group_id,
+            metadata={"text": message_text[:200], "media_type": media_type or "text"},
+        )
         await _send_log_to_channel(
             context,
             (
@@ -5977,10 +6167,13 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 f"Chat ID: {group_id}\n"
                 f"User: {_safe_user_mention(username, first_name)}\n"
                 f"User ID: {user_id}\n"
+                f"Type: {media_type or 'text'}\n"
                 f"Message: {message_text[:300]}\n"
                 f"At: {time.strftime('%Y-%m-%d %H:%M:%S')}"
             ),
         )
+        if _is_non_text_media_message(update.message):
+            await _copy_message_to_log_channel(context, update.message)
         
         message_text_lower = message_text.lower().strip()
         
@@ -6065,25 +6258,26 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             logger.info(f"User {user_id} set language to: hinglish")
         
         # Build system prompt with language preference
-        user_lang = LANGUAGE_PREFERENCES.get(user_id) or BOT_DB.get_user_language(user_id)
-        if user_lang not in {"english", "hinglish", "auto"}:
-            user_lang = "auto"
-        lang_instruction = f"\n[User language: {user_lang.upper()}]"
-        if user_lang == "english":
-            lang_instruction += " Reply ONLY in English."
-        elif user_lang == "hinglish":
-            lang_instruction += " Reply in Hinglish."
-        else:
-            lang_instruction += " Reply in the same language used by the user message."
-        
-        system_prompt_with_lang = SYSTEM_PROMPT + lang_instruction
+        user_lang = _normalize_language_preference(
+            LANGUAGE_PREFERENCES.get(user_id) or BOT_DB.get_user_language(user_id)
+        )
+        system_prompt_with_lang = _build_chat_system_prompt(
+            message_text,
+            user_lang=user_lang,
+            is_group=True,
+        )
         # Tool-intent short-circuit for group AI triggers
         intent = _detect_intent(message_text)
         tool_reply = await _handle_tool_intent(intent, message_text, user_id, group_id)
         if tool_reply:
             BOT_DB.add_chat_memory(user_id, group_id, "user", message_text)
             BOT_DB.add_chat_memory(user_id, group_id, "assistant", tool_reply)
-            await update.message.reply_text(tool_reply, quote=True if bot_mentioned else False)
+            tagged_reply, parse_mode = _format_tagged_group_reply(update.effective_user, tool_reply)
+            await update.message.reply_text(
+                tagged_reply,
+                parse_mode=parse_mode,
+                quote=True,
+            )
             return
 
         history = _build_memory_messages(user_id, group_id, limit=8)
@@ -6113,9 +6307,11 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         
         # Send response as reply
         try:
+            tagged_reply, parse_mode = _format_tagged_group_reply(update.effective_user, ai_response)
             await update.message.reply_text(
-                ai_response,
-                quote=True if bot_mentioned else False,
+                tagged_reply,
+                parse_mode=parse_mode,
+                quote=True,
             )
             BOT_DB.add_chat_memory(user_id, group_id, "user", message_text)
             BOT_DB.add_chat_memory(user_id, group_id, "assistant", ai_response)
@@ -7294,10 +7490,19 @@ def main() -> None:
         )
     )
 
-    # Private messages (all text messages in private chat)
+    # Private messages (text + common media in private chat)
     application.add_handler(
         MessageHandler(
-            filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
+            (
+                filters.TEXT
+                | filters.PHOTO
+                | filters.ANIMATION
+                | filters.Sticker.ALL
+                | filters.Document.ALL
+                | filters.VIDEO
+            )
+            & ~filters.COMMAND
+            & filters.ChatType.PRIVATE,
             handle_private_message,
         )
     )
@@ -7310,10 +7515,19 @@ def main() -> None:
         )
     )
     
-    # Group messages - regular message handler (processes after @all check)
+    # Group messages - regular message handler (text + common media)
     application.add_handler(
         MessageHandler(
-            filters.TEXT & ~filters.COMMAND & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
+            (
+                filters.TEXT
+                | filters.PHOTO
+                | filters.ANIMATION
+                | filters.Sticker.ALL
+                | filters.Document.ALL
+                | filters.VIDEO
+            )
+            & ~filters.COMMAND
+            & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
             handle_group_message,
         )
     )
