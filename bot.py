@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import json
 import logging
 import os
@@ -47,9 +47,15 @@ from database import BotDatabase
 from vc_manager import VCManager
 
 # Game module path (project/game)
-PROJECT_DIR = Path(__file__).resolve().parent / "project"
+ROOT_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = ROOT_DIR / "project"
 if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
+
+try:
+    from start_card import create_start_card
+except Exception:  # pragma: no cover - optional visual helper
+    create_start_card = None
 
 from game.economy import balance as mafia_balance
 from game.inventory import get_inventory as mafia_get_inventory, use_item as mafia_use_item
@@ -61,10 +67,12 @@ from game.leaderboard import (
 from game.mafia_engine import (
     MIN_PLAYERS as MAFIA_MIN_PLAYERS,
     active_games as MAFIA_ACTIVE_GAMES,
-    cancel_game as mafia_cancel_game,
+    cleanup_game as mafia_cleanup_game,
     create_game as mafia_create_game,
     extend_join_time as mafia_extend_join_time,
     join_game as mafia_join_game,
+    night_phase as mafia_night_phase,
+    day_phase as mafia_day_phase,
     start_game as mafia_start_game,
     start_join_timer as mafia_start_join_timer,
 )
@@ -91,6 +99,9 @@ VC_API_ID: Final[int] = int(os.getenv("VC_API_ID", str(API_ID)))
 VC_API_HASH: Final[str] = os.getenv("VC_API_HASH", API_HASH)
 ASSISTANT_SESSION: Final[str] = os.getenv("ASSISTANT_SESSION", "")
 START_STICKER_FILE_ID: Final[str] = os.getenv("START_STICKER_FILE_ID", "")
+START_PANEL_PHOTO_FILE_ID: Final[str] = os.getenv("START_PANEL_PHOTO_FILE_ID", "").strip()
+START_PANEL_PHOTO_URL: Final[str] = os.getenv("START_PANEL_PHOTO_URL", "").strip()
+START_BANNER_PATH: Final[str] = os.getenv("START_BANNER_PATH", "banner.jpg").strip()
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable not set!")
@@ -1773,6 +1784,125 @@ def _build_start_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 
+def _start_greeting_label() -> str:
+    hour = time.localtime().tm_hour
+    if 5 <= hour < 12:
+        return "Good Morning"
+    if 12 <= hour < 17:
+        return "Good Afternoon"
+    if 17 <= hour < 23:
+        return "Good Evening"
+    return "Late Night Vibes"
+
+
+def _build_start_panel_text(user_name: str) -> str:
+    safe_name = (user_name or "Friend").strip()
+    greeting = _start_greeting_label()
+    return (
+        f"âœ¨ HEY BABY {safe_name} NICE TO MEET YOU ðŸŒ¹\n\n"
+        "â—Ž THIS IS [ANIMX GAME]\n\n"
+        "âž¤ A premium designed game + chat bot for Telegram groups & channels.\n\n"
+        "â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n"
+        "ðŸŽ® Multiplayer Mafia Battles\n"
+        "ðŸš€ Fast â€¢ Smart â€¢ Always Active\n"
+        "ðŸ’¬ Chat Naturally Like a Friend\n"
+        "â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n\n"
+        f"ðŸŒ™ {greeting} ðŸ’–"
+    )
+
+
+def _resolve_start_banner_path() -> Path:
+    banner_path = Path(START_BANNER_PATH)
+    if banner_path.is_absolute():
+        return banner_path
+    return ROOT_DIR / banner_path
+
+
+async def _send_start_panel_media(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    user_id: int,
+    user_name: str,
+    reply_to_message_id: Optional[int] = None,
+) -> None:
+    """Best-effort premium start card (file_id/url/generated/local file)."""
+    sent_photo = False
+
+    try:
+        if START_PANEL_PHOTO_FILE_ID:
+            await context.bot.send_photo(
+                chat_id=chat_id,
+                photo=START_PANEL_PHOTO_FILE_ID,
+                reply_to_message_id=reply_to_message_id,
+            )
+            sent_photo = True
+        elif START_PANEL_PHOTO_URL:
+            await context.bot.send_photo(
+                chat_id=chat_id,
+                photo=START_PANEL_PHOTO_URL,
+                reply_to_message_id=reply_to_message_id,
+            )
+            sent_photo = True
+
+        if not sent_photo and create_start_card:
+            profile_url = ""
+            try:
+                photos = await context.bot.get_user_profile_photos(user_id, limit=1)
+                if photos.photos:
+                    file_id = photos.photos[0][-1].file_id
+                    user_photo = await context.bot.get_file(file_id)
+                    profile_url = user_photo.file_path or ""
+            except Exception:
+                profile_url = ""
+
+            card = create_start_card(str(_resolve_start_banner_path()), user_name, profile_url)
+            await context.bot.send_photo(
+                chat_id=chat_id,
+                photo=card,
+                reply_to_message_id=reply_to_message_id,
+            )
+            sent_photo = True
+
+        if not sent_photo:
+            banner_path = _resolve_start_banner_path()
+            if banner_path.exists():
+                with banner_path.open("rb") as f:
+                    await context.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=f,
+                        reply_to_message_id=reply_to_message_id,
+                    )
+    except Exception as e:
+        logger.warning(f"Could not send start panel media: {e}")
+
+
+async def _send_start_panel(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    reply_to_message_id: Optional[int] = None,
+) -> None:
+    if not update.effective_chat or not update.effective_user:
+        return
+
+    chat_id = update.effective_chat.id
+    user = update.effective_user
+    user_name = user.first_name or "Friend"
+
+    await _send_start_panel_media(
+        context=context,
+        chat_id=chat_id,
+        user_id=user.id,
+        user_name=user_name,
+        reply_to_message_id=reply_to_message_id,
+    )
+
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=_build_start_panel_text(user_name),
+        reply_markup=_build_start_keyboard(),
+    )
+
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start command with inline buttons"""
     await _register_user_from_update(update)
@@ -1800,16 +1930,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         ),
     )
 
-    await update.effective_message.reply_text(
-        START_TEXT,
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=_build_start_keyboard(),
-    )
-    if START_STICKER_FILE_ID:
-        try:
-            await update.effective_message.reply_sticker(START_STICKER_FILE_ID)
-        except Exception as e:
-            logger.warning(f"Could not send start sticker: {e}")
+    reply_to_message_id = update.effective_message.message_id if update.effective_message else None
+    await _send_start_panel(update, context, reply_to_message_id=reply_to_message_id)
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -5890,11 +6012,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
 
     elif query.data == "start":
-        await query.edit_message_text(
-            START_TEXT,
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=_build_start_keyboard(),
-        )
+        try:
+            if query.message:
+                await query.message.delete()
+        except Exception:
+            pass
+        await _send_start_panel(update, context)
 
     elif query.data == "show_settings_info":
         user_groups = []
@@ -6146,6 +6269,32 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         
         # Register group member
         await _register_group_member(group_id, user_id, username, first_name)
+
+        # Mafia day anti-spam + night speaking lock (game players only).
+        game = MAFIA_ACTIVE_GAMES.get(group_id)
+        if game and user_id in set(game.get("players", [])):
+            if game.get("phase") == "night":
+                try:
+                    await update.message.delete()
+                except Exception:
+                    pass
+                return
+
+            if game.get("phase") == "day":
+                if user_id in set(game.get("silenced_players", set())):
+                    try:
+                        await update.message.delete()
+                    except Exception:
+                        pass
+                    return
+                message_count = game.setdefault("message_count", {})
+                message_count[user_id] = int(message_count.get(user_id, 0)) + 1
+                if message_count[user_id] > 5:
+                    try:
+                        await update.message.delete()
+                    except Exception:
+                        pass
+                    return
 
         # Auto-filters (keyword based replies)
         if update.effective_user and not update.effective_user.is_bot:
@@ -6721,14 +6870,71 @@ def build_mafia_profile_keyboard() -> InlineKeyboardMarkup:
 
 def _mafia_lobby_text(chat_id: int) -> str:
     game = MAFIA_ACTIVE_GAMES.get(chat_id)
-    joined = len(game["players"]) if game else 0
-    return f"MAFIA GAME LOBBY\n\nPlayers Joined: {joined} / 25\n\nWaiting for players..."
+    if not game:
+        return "MAFIA GAME LOBBY\n\nNo active game."
+    joined = len(game["players"])
+    remaining = max(0, int(game.get("join_deadline", 0) - time.monotonic()))
+    return (
+        "MAFIA GAME LOBBY\n\n"
+        f"Players Joined: {joined} / 25\n"
+        f"Join Time Left: {remaining}s\n\n"
+        "Waiting for players..."
+    )
 
 
 def _launch_mafia_join_lobby(chat_id: int, join_time: int, context: ContextTypes.DEFAULT_TYPE) -> None:
     mafia_create_game(chat_id, join_time=join_time)
     task = asyncio.create_task(mafia_start_join_timer(chat_id, context))
     MAFIA_ACTIVE_GAMES[chat_id]["join_task"] = task
+
+
+async def auto_delete_message(
+    message: Optional[Message], context: ContextTypes.DEFAULT_TYPE, delay: int = 2
+) -> None:
+    if not message:
+        return
+    await asyncio.sleep(delay)
+    try:
+        await context.bot.delete_message(chat_id=message.chat_id, message_id=message.message_id)
+    except Exception:
+        pass
+
+
+def _set_mafia_join_panel(chat_id: int, message_id: Optional[int]) -> None:
+    game = MAFIA_ACTIVE_GAMES.get(chat_id)
+    if not game or not message_id:
+        return
+    game["join_message_id"] = message_id
+    messages = game.get("messages")
+    if isinstance(messages, set):
+        messages.add(message_id)
+
+
+async def _update_mafia_join_panel(
+    chat_id: int,
+    context: ContextTypes.DEFAULT_TYPE,
+    note: Optional[str] = None,
+) -> bool:
+    game = MAFIA_ACTIVE_GAMES.get(chat_id)
+    if not game:
+        return False
+    join_message_id = game.get("join_message_id")
+    if not join_message_id:
+        return False
+
+    text = _mafia_lobby_text(chat_id)
+    if note:
+        text = f"{text}\n\n{note}"
+    try:
+        await context.bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=join_message_id,
+            text=text,
+            reply_markup=build_mafia_lobby_keyboard(),
+        )
+        return True
+    except Exception:
+        return False
 
 
 def _mafia_wins_rank_text(user_id: int) -> tuple[int, str, str]:
@@ -6863,16 +7069,16 @@ async def mafia_profile_panel(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def mafia_guide_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (
-        "🎭 HOW MAFIA GAME WORKS\n"
-        "👥 Minimum 5 players required.\n\n"
-        "🌙 Night Phase:\n"
+        "ðŸŽ­ HOW MAFIA GAME WORKS\n"
+        "ðŸ‘¥ Minimum 5 players required.\n\n"
+        "ðŸŒ™ Night Phase:\n"
         "Special roles use powers privately in bot DM.\n\n"
-        "☀ Day Phase:\n"
+        "â˜€ Day Phase:\n"
         "Players discuss and vote to eliminate someone.\n\n"
-        "🏆 Win Conditions:\n"
+        "ðŸ† Win Conditions:\n"
         "Villagers win -> All Mafia eliminated\n"
         "Mafia win -> Mafia >= Villagers\n\n"
-        "🔢 ROLE UNLOCK SYSTEM\n"
+        "ðŸ”¢ ROLE UNLOCK SYSTEM\n"
         "5-6 Players -> 1 Mafia + Doctor\n"
         "7-8 Players -> + Detective\n"
         "9-10 Players -> + Mayor\n"
@@ -6880,26 +7086,26 @@ async def mafia_guide_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         "14-16 Players -> + Silencer\n"
         "17-20 Players -> + Guardian + Sniper\n"
         "21+ Players -> + Oracle + Bomber + Judge\n\n"
-        "🎭 ROLE POWERS\n"
-        "🔪 Mafia -> Kill 1 player per night\n"
-        "🛡 Doctor -> Save 1 player\n"
-        "🕵 Detective -> Check if Mafia\n"
-        "👑 Mayor -> Double vote\n"
-        "🧙 Witch -> 1 save potion + 1 kill potion\n"
-        "🤫 Silencer -> Mute player next day\n"
-        "🛡 Guardian -> Protect from night attack\n"
-        "🎯 Sniper -> One-time instant kill\n"
-        "🔮 Oracle -> See future alignment\n"
-        "💣 Bomber -> Kills attacker if eliminated\n"
-        "⚖ Judge -> Cancel a vote once\n"
-        "👥 Villager -> No power, but vote power\n\n"
-        "💰 COIN SYSTEM\n"
+        "ðŸŽ­ ROLE POWERS\n"
+        "ðŸ”ª Mafia -> Kill 1 player per night\n"
+        "ðŸ›¡ Doctor -> Save 1 player\n"
+        "ðŸ•µ Detective -> Check if Mafia\n"
+        "ðŸ‘‘ Mayor -> Double vote\n"
+        "ðŸ§™ Witch -> 1 save potion + 1 kill potion\n"
+        "ðŸ¤« Silencer -> Mute player next day\n"
+        "ðŸ›¡ Guardian -> Protect from night attack\n"
+        "ðŸŽ¯ Sniper -> One-time instant kill\n"
+        "ðŸ”® Oracle -> See future alignment\n"
+        "ðŸ’£ Bomber -> Kills attacker if eliminated\n"
+        "âš– Judge -> Cancel a vote once\n"
+        "ðŸ‘¥ Villager -> No power, but vote power\n\n"
+        "ðŸ’° COIN SYSTEM\n"
         "Win = +50\n"
         "Survival till end = +20\n"
         "MVP vote = +30\n"
         "Lose = +10 participation\n"
         "Coins stored permanently in database.\n\n"
-        "🛒 SHOP ITEMS\n"
+        "ðŸ›’ SHOP ITEMS\n"
         "Shield - 500 (Extra life)\n"
         "Vote Boost - 600 (1.5x vote)\n"
         "Reveal Scan - 200 (One alignment check)\n"
@@ -6914,8 +7120,35 @@ async def mafia_guide_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
+def _mafia_admin_panel_markup() -> InlineKeyboardMarkup:
+    keyboard = [
+        [InlineKeyboardButton("â¹ Force Stop Game", callback_data="admin_stop")],
+        [InlineKeyboardButton("ðŸŒ™ Force Night", callback_data="admin_night")],
+        [InlineKeyboardButton("â˜€ Force Day", callback_data="admin_day")],
+        [InlineKeyboardButton("ðŸŽ­ Reveal Roles", callback_data="admin_reveal")],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+async def mafia_admin_panel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_chat or update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        return
+    if not await _mafia_is_admin_chat(update.effective_chat.id, update.effective_user.id, context):
+        return
+    await update.effective_message.reply_text(
+        "ðŸ›  Admin Game Control Panel",
+        reply_markup=_mafia_admin_panel_markup(),
+    )
+
+
 async def mafia_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _register_mafia_user_from_update(update)
+    if not update.effective_chat or update.effective_chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        await update.effective_message.reply_text("/mafia works in groups only.")
+        return
+    if update.message:
+        asyncio.create_task(auto_delete_message(update.message, context, delay=2))
+
     chat_id = update.effective_chat.id
     join_time = 60
     if context.args:
@@ -6924,26 +7157,47 @@ async def mafia_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         except ValueError:
             pass
     _launch_mafia_join_lobby(chat_id, join_time, context)
-    await update.effective_message.reply_text(_mafia_lobby_text(chat_id), reply_markup=build_mafia_lobby_keyboard())
+    panel = await update.effective_message.reply_text(
+        _mafia_lobby_text(chat_id),
+        reply_markup=build_mafia_lobby_keyboard(),
+    )
+    _set_mafia_join_panel(chat_id, panel.message_id)
 
 
 async def mafia_join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _register_mafia_user_from_update(update)
-    ok, message = mafia_join_game(update.effective_chat.id, update.effective_user.id)
-    await update.effective_message.reply_text(message if ok else f"ERR: {message}")
+    if not update.effective_chat:
+        return
+    if update.message:
+        asyncio.create_task(auto_delete_message(update.message, context, delay=2))
+    chat_id = update.effective_chat.id
+    ok, message = mafia_join_game(chat_id, update.effective_user.id)
+    panel_note = f"OK: {message}" if ok else f"ERR: {message}"
+    if await _update_mafia_join_panel(chat_id, context, note=panel_note):
+        return
+    await update.effective_message.reply_text(panel_note)
 
 
 async def mafia_extend_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _register_mafia_user_from_update(update)
-    remaining = mafia_extend_join_time(update.effective_chat.id, 30)
+    if not update.effective_chat:
+        return
+    if update.message:
+        asyncio.create_task(auto_delete_message(update.message, context, delay=2))
+    chat_id = update.effective_chat.id
+    remaining = mafia_extend_join_time(chat_id, 30)
     if remaining is None:
         await update.effective_message.reply_text("No active joining phase to extend.")
+        return
+    if await _update_mafia_join_panel(chat_id, context, note=f"Extended. Remaining: {remaining}s"):
         return
     await update.effective_message.reply_text(f"Join time extended by 30 seconds. Now: {remaining} sec")
 
 
 async def mafia_forcestart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _register_mafia_user_from_update(update)
+    if update.message:
+        asyncio.create_task(auto_delete_message(update.message, context, delay=2))
     chat_id = update.effective_chat.id
     game = MAFIA_ACTIVE_GAMES.get(chat_id)
     if not game:
@@ -6955,8 +7209,9 @@ async def mafia_forcestart_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
     if len(game["players"]) < MAFIA_MIN_PLAYERS:
         await update.effective_message.reply_text("Not enough players.")
         return
-    await update.effective_message.reply_text("Admin started the game manually.")
-    await mafia_start_game(chat_id, context)
+    started = await mafia_start_game(chat_id, context)
+    if not started:
+        await update.effective_message.reply_text("Could not start game. Check permissions/settings.")
 
 
 async def mafia_myrole_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -7019,6 +7274,44 @@ async def mafia_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         await mafia_guide_panel(update, context)
         return
 
+    if data in {"admin_stop", "admin_night", "admin_day", "admin_reveal"}:
+        if not await _mafia_is_admin_chat(chat_id, user_id, context):
+            await q.answer("Admins only.", show_alert=True)
+            return
+
+        game = MAFIA_ACTIVE_GAMES.get(chat_id)
+        if data != "admin_reveal" and not game:
+            await q.answer("No active game.", show_alert=True)
+            return
+        if data in {"admin_night", "admin_day"} and (not game or not game.get("started")):
+            await q.answer("Game not started yet.", show_alert=True)
+            return
+
+        if data == "admin_stop":
+            await mafia_cleanup_game(chat_id, context, delete_messages=True)
+            await context.bot.send_message(chat_id=chat_id, text="Game force-stopped by admin.")
+            return
+
+        if data == "admin_night":
+            await mafia_night_phase(chat_id, context)
+            return
+
+        if data == "admin_day":
+            await mafia_day_phase(chat_id, context)
+            return
+
+        if data == "admin_reveal":
+            if not game or not game.get("roles"):
+                await q.answer("Roles not assigned yet.", show_alert=True)
+                return
+            lines = ["ðŸŽ­ Role Reveal"]
+            for pid, role in game["roles"].items():
+                lines.append(f"{pid}: {mafia_role_label(role)}")
+            lines.append("")
+            lines.append("Use /gamepanel to reopen controls.")
+            await q.edit_message_text("\n".join(lines))
+            return
+
     if data == "mafia_leaderboard":
         rows = mafia_top_players()
         text = "Top Players\n\n" + (
@@ -7042,10 +7335,12 @@ async def mafia_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             return
         _launch_mafia_join_lobby(chat_id, 60, context)
         await q.edit_message_text(_mafia_lobby_text(chat_id), reply_markup=build_mafia_lobby_keyboard())
+        _set_mafia_join_panel(chat_id, q.message.message_id if q.message else None)
         return
     if data == "mafia_join":
         ok, msg = mafia_join_game(chat_id, user_id)
         prefix = "OK" if ok else "ERR"
+        _set_mafia_join_panel(chat_id, q.message.message_id if q.message else None)
         await q.edit_message_text(
             f"{_mafia_lobby_text(chat_id)}\n\n{prefix}: {msg}",
             reply_markup=build_mafia_lobby_keyboard(),
@@ -7059,14 +7354,17 @@ async def mafia_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         if not game or len(game["players"]) < MAFIA_MIN_PLAYERS:
             await q.answer("Not enough players.", show_alert=True)
             return
-        await q.edit_message_text("Admin started the game manually.")
-        await mafia_start_game(chat_id, context)
+        _set_mafia_join_panel(chat_id, q.message.message_id if q.message else None)
+        started = await mafia_start_game(chat_id, context)
+        if not started:
+            await q.answer("Could not start game.", show_alert=True)
         return
     if data == "mafia_extend":
         remaining = mafia_extend_join_time(chat_id, 30)
         if remaining is None:
             await q.answer("No joining phase active.", show_alert=True)
             return
+        _set_mafia_join_panel(chat_id, q.message.message_id if q.message else None)
         await q.edit_message_text(
             f"{_mafia_lobby_text(chat_id)}\n\nExtended. Remaining: {remaining}s",
             reply_markup=build_mafia_lobby_keyboard(),
@@ -7076,10 +7374,11 @@ async def mafia_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         if not await _mafia_is_admin_chat(chat_id, user_id, context):
             await q.answer("Admins only.", show_alert=True)
             return
-        if not mafia_cancel_game(chat_id):
+        if not MAFIA_ACTIVE_GAMES.get(chat_id):
             await q.answer("No active game.", show_alert=True)
             return
-        await q.edit_message_text("Game cancelled by admin.")
+        await mafia_cleanup_game(chat_id, context, delete_messages=True)
+        await context.bot.send_message(chat_id=chat_id, text="Game cancelled by admin.")
         return
     if data in {"buy_shield", "buy_voteboost", "buy_reveal", "buy_silencetoken", "buy_nightimmunity"}:
         item = data.split("buy_", 1)[1]
@@ -7105,7 +7404,8 @@ async def mafia_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 return
             if user_id not in game.get("alive", []):
                 return
-            if user_id == game.get("silenced"):
+            silenced_players = set(game.get("silenced_players", set()))
+            if user_id in silenced_players:
                 return
             if user_id in game.get("day_voters", set()):
                 return
@@ -7157,7 +7457,8 @@ async def mafia_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 game["night_actions"]["poison"] = target
                 game["witch_potions"]["poison"] -= 1
             elif ability == "silence" and game["roles"].get(user_id) == "silencer":
-                game["silenced"] = target
+                pending = game.setdefault("pending_silenced", set())
+                pending.add(target)
             return
     except Exception:
         pass
@@ -7352,9 +7653,11 @@ def main() -> None:
     application.add_handler(CommandHandler("vstop", vstop_command))
     application.add_handler(CommandHandler("vcguide", vcguide_command))
     application.add_handler(CommandHandler("mafia", mafia_cmd))
+    application.add_handler(CommandHandler("startmafia", mafia_cmd))
     application.add_handler(CommandHandler("join", mafia_join_cmd))
     application.add_handler(CommandHandler("extend", mafia_extend_cmd))
     application.add_handler(CommandHandler("forcestart", mafia_forcestart_cmd))
+    application.add_handler(CommandHandler("gamepanel", mafia_admin_panel_cmd))
     application.add_handler(CommandHandler("myrole", mafia_myrole_cmd))
     application.add_handler(CommandHandler("leaderboard", mafia_leaderboard_cmd))
     application.add_handler(CommandHandler("buy", mafia_buy_cmd))
@@ -7465,7 +7768,7 @@ def main() -> None:
     application.add_handler(
         CallbackQueryHandler(
             mafia_callback_handler,
-            pattern=r"^(mafia_|role_|buy_(shield|voteboost|reveal|silencetoken|nightimmunity)|vote_|night_)",
+            pattern=r"^(mafia_|role_|buy_(shield|voteboost|reveal|silencetoken|nightimmunity)|vote_|night_|admin_)",
         )
     )
     # Settings callbacks (higher priority)
@@ -7547,6 +7850,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
 

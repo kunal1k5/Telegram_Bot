@@ -63,10 +63,10 @@ def create_start_card(base_image_path: str, user_name: str, profile_photo_url: O
     title_font = ImageFont.load_default()
     text_font = ImageFont.load_default()
 
-    draw.text((80, HEIGHT - 235), "BABY • Premium Music AI", fill=(255, 255, 255), font=title_font)
+    draw.text((80, HEIGHT - 235), "BABY | Premium Music AI", fill=(255, 255, 255), font=title_font)
     draw.text((80, HEIGHT - 195), f"{greeting}, {user_name}", fill=(255, 210, 245), font=text_font)
     draw.text((80, HEIGHT - 155), "Cinematic music + chat companion", fill=(210, 220, 240), font=text_font)
-    draw.text((80, HEIGHT - 120), "Fast • Smart • Always Active", fill=(210, 220, 240), font=text_font)
+    draw.text((80, HEIGHT - 120), "Fast | Smart | Always Active", fill=(210, 220, 240), font=text_font)
 
     pfp = _load_profile_image(profile_photo_url or "")
     if pfp is not None:
