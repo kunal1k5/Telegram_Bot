@@ -133,8 +133,14 @@ BOT_NAME: Final[str] = "ANIMX CLAN"
 BOT_USERNAME: Final[str] = "@AnimxClanBot"
 OWNER_USERNAME: Final[str] = "@kunal1k5"
 CHANNEL_USERNAME: Final[str] = "@AnimxClan_Channel"
-CONTACT_USERNAME: Final[str] = (os.getenv("CONTACT_USERNAME") or os.getenv("CONTACT_ID") or "").strip()
-PROMOTION_USERNAME: Final[str] = (os.getenv("PROMOTION_USERNAME") or os.getenv("PROMOTION_ID") or "").strip()
+DEFAULT_CONTACT_USERNAME: Final[str] = "@Satoru_1gojooo"
+DEFAULT_PROMOTION_USERNAME: Final[str] = "@Joy_boy_dady"
+CONTACT_USERNAME: Final[str] = (
+    os.getenv("CONTACT_USERNAME") or os.getenv("CONTACT_ID") or DEFAULT_CONTACT_USERNAME
+).strip()
+PROMOTION_USERNAME: Final[str] = (
+    os.getenv("PROMOTION_USERNAME") or os.getenv("PROMOTION_ID") or DEFAULT_PROMOTION_USERNAME
+).strip()
 CONTACT_PROMOTION_IDS: Final[str] = (
     os.getenv("CONTACT_PROMOTION_IDS")
     or os.getenv("CONTACT_AND_PROMOTION")

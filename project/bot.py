@@ -51,8 +51,14 @@ except Exception:
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 BOT_USERNAME = os.getenv("BOT_USERNAME", "YOUR_BOT_USERNAME").strip("@")
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "@AnimxClan_Channel").strip()
-CONTACT_USERNAME = (os.getenv("CONTACT_USERNAME") or os.getenv("CONTACT_ID") or "").strip()
-PROMOTION_USERNAME = (os.getenv("PROMOTION_USERNAME") or os.getenv("PROMOTION_ID") or "").strip()
+DEFAULT_CONTACT_USERNAME = "@Satoru_1gojooo"
+DEFAULT_PROMOTION_USERNAME = "@Joy_boy_dady"
+CONTACT_USERNAME = (
+    os.getenv("CONTACT_USERNAME") or os.getenv("CONTACT_ID") or DEFAULT_CONTACT_USERNAME
+).strip()
+PROMOTION_USERNAME = (
+    os.getenv("PROMOTION_USERNAME") or os.getenv("PROMOTION_ID") or DEFAULT_PROMOTION_USERNAME
+).strip()
 CONTACT_PROMOTION_IDS = (
     os.getenv("CONTACT_PROMOTION_IDS")
     or os.getenv("CONTACT_AND_PROMOTION")
