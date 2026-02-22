@@ -1,6 +1,8 @@
 import asyncio
+from collections import defaultdict, deque
 from datetime import datetime
 import os
+import re
 import requests
 import subprocess
 import sys
@@ -51,7 +53,13 @@ BOT_USERNAME = os.getenv("BOT_USERNAME", "YOUR_BOT_USERNAME").strip("@")
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "@AnimxClan_Channel").strip()
 CONTACT_USERNAME = (os.getenv("CONTACT_USERNAME") or os.getenv("CONTACT_ID") or "").strip()
 PROMOTION_USERNAME = (os.getenv("PROMOTION_USERNAME") or os.getenv("PROMOTION_ID") or "").strip()
-CONTACT_PROMOTION_IDS = (os.getenv("CONTACT_PROMOTION_IDS") or os.getenv("CONTACT_AND_PROMOTION") or "").strip()
+CONTACT_PROMOTION_IDS = (
+    os.getenv("CONTACT_PROMOTION_IDS")
+    or os.getenv("CONTACT_AND_PROMOTION")
+    or os.getenv("CONTACT_PROMOTION")
+    or os.getenv("CONTACT_PROMO_IDS")
+    or ""
+).strip()
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
@@ -79,7 +87,7 @@ def _resolve_contact_promo() -> tuple[str, str]:
     contact = CONTACT_USERNAME
     promo = PROMOTION_USERNAME
     if CONTACT_PROMOTION_IDS:
-        parts = [p.strip() for p in CONTACT_PROMOTION_IDS.split(",") if p.strip()]
+        parts = [p.strip() for p in re.split(r"[\s,|/]+", CONTACT_PROMOTION_IDS) if p.strip()]
         if parts:
             contact = parts[0]
         if len(parts) > 1:
@@ -146,56 +154,102 @@ def build_start_keyboard(bot_username: str) -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton("Channel", url=channel_url)])
 
     rows.append([InlineKeyboardButton("Mafia Game Hub", callback_data="mafia_hub")])
-
-    contact_handle, promo_handle = _resolve_contact_promo()
-    contact_url = _telegram_url(contact_handle)
-    promo_url = _telegram_url(promo_handle)
-    contact_row = []
-    if contact_url:
-        contact_row.append(InlineKeyboardButton("Contact", url=contact_url))
-    if promo_url and promo_url != contact_url:
-        contact_row.append(InlineKeyboardButton("Promotion", url=promo_url))
-    if contact_row:
-        rows.append(contact_row)
+    rows.append([InlineKeyboardButton("Contact / Promotion", callback_data="contact_promo")])
 
     return InlineKeyboardMarkup(rows)
 
 
 SYSTEM_PROMPT = (
-    "You are Baby, a warm and playful Hinglish chat companion. "
-    "Reply naturally in short helpful style, like a close friend."
+    "You are Baby, a warm playful chill chat companion.\n"
+    "\n"
+    "Core behavior:\n"
+    "- Mirror user tone and mood naturally.\n"
+    "- Sound like a close friend, not a formal assistant.\n"
+    "- Keep replies smooth, human, and emotionally aware.\n"
+    "- Use Hinglish naturally when user writes Hindi/Hinglish.\n"
+    "- Keep group replies short (1-2 lines), private replies can be deeper.\n"
+    "\n"
+    "Style rules:\n"
+    "- Avoid robotic wording, lectures, and generic bullet dumps.\n"
+    "- Do not say you are an AI/model/bot in normal chat.\n"
+    "- Keep replies chill, classy, and engaging.\n"
+    "- Use emojis naturally (1-2 max).\n"
+    "\n"
+    "Safety:\n"
+    "- No hate, threats, self-harm encouragement, or explicit sexual content.\n"
+    "- If user is upset, be supportive and calm."
 )
+CHAT_MEMORY_LIMIT = 10
+CHAT_MEMORY: dict[str, deque[dict[str, str]]] = defaultdict(lambda: deque(maxlen=CHAT_MEMORY_LIMIT))
 
 
-def _fallback_chat_reply(user_text: str) -> str:
+def _chat_memory_key(update: Update) -> str:
+    chat = update.effective_chat
+    user = update.effective_user
+    if chat.type == ChatType.PRIVATE:
+        return f"pv:{user.id}"
+    return f"grp:{chat.id}:{user.id}"
+
+
+def _get_history(memory_key: str) -> list[dict[str, str]]:
+    return list(CHAT_MEMORY.get(memory_key, []))
+
+
+def _remember_turn(memory_key: str, role: str, content: str) -> None:
+    text = (content or "").strip()
+    if not text:
+        return
+    CHAT_MEMORY[memory_key].append({"role": role, "content": text[:1200]})
+
+
+def _fallback_chat_reply(user_text: str, is_private: bool) -> str:
     text = (user_text or "").lower().strip()
     if any(word in text for word in {"hi", "hello", "hey", "gm", "good morning"}):
-        return "Hii baby, main yahin hoon. Aaj kya baat karein? 💖"
+        return "Hii baby, main yahin hoon. Aaj kya scene hai? 💖"
     if any(word in text for word in {"sad", "upset", "depressed", "dukhi"}):
-        return "Main tumhare saath hoon. Bolo kya hua, step by step solve karte hain. 🤍"
+        return "Main hoon na, tension mat lo. Bolo kya hua, aaram se sort karte hain. 🤍"
     if any(word in text for word in {"help", "commands", "command"}):
-        return "Main chat, mafia game aur utility commands me help kar sakti hoon. /help try karo."
-    return "Samjha. Isko aur clear karke bolo, main best possible help dungi. ✨"
+        return "Main chat, mafia game aur commands me full help karungi. /help bhejo."
+    if is_private:
+        return "Samjhi. Thoda aur detail do, fir exact best reply deti hoon. ✨"
+    return "Nice. Thoda aur clear bolo na, main pakka better reply dungi."
 
 
-def _call_openrouter(user_text: str) -> Optional[str]:
+def _conversation_messages(
+    user_text: str, history: list[dict[str, str]], is_private: bool
+) -> list[dict[str, str]]:
+    mode_hint = (
+        "Mode: private chat. You can be a little deeper, still concise."
+        if is_private
+        else "Mode: group chat. Keep replies short, punchy, and natural."
+    )
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": mode_hint},
+    ]
+    messages.extend(history[-8:])
+    messages.append({"role": "user", "content": user_text})
+    return messages
+
+
+def _call_openrouter(user_text: str, history: list[dict[str, str]], is_private: bool) -> Optional[str]:
     if not OPENROUTER_API_KEY:
         return None
     try:
+        messages = _conversation_messages(user_text, history, is_private)
         response = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
             headers={
                 "Authorization": f"Bearer {OPENROUTER_API_KEY}",
                 "Content-Type": "application/json",
+                "HTTP-Referer": "https://t.me/AnimxClanBot",
+                "X-Title": "ANIMX Music Bot",
             },
             json={
                 "model": OPENROUTER_MODEL,
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_text},
-                ],
-                "temperature": 0.8,
-                "max_tokens": 220,
+                "messages": messages,
+                "temperature": 0.95,
+                "max_tokens": 260,
             },
             timeout=30,
         )
@@ -206,17 +260,28 @@ def _call_openrouter(user_text: str) -> Optional[str]:
         return None
 
 
-def _call_gemini(user_text: str) -> Optional[str]:
+def _call_gemini(user_text: str, history: list[dict[str, str]], is_private: bool) -> Optional[str]:
     if not GEMINI_API_KEY:
         return None
     try:
+        mode_hint = "Private chat mode." if is_private else "Group chat mode (keep it short)."
+        transcript = []
+        for msg in history[-8:]:
+            speaker = "User" if msg.get("role") == "user" else "Baby"
+            transcript.append(f"{speaker}: {msg.get('content', '')}")
+        prompt = (
+            f"{SYSTEM_PROMPT}\n\n{mode_hint}\n\n"
+            f"Conversation:\n{chr(10).join(transcript)}\n"
+            f"User: {user_text}\n"
+            "Baby:"
+        )
         response = requests.post(
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
             params={"key": GEMINI_API_KEY},
             headers={"Content-Type": "application/json"},
             json={
-                "contents": [{"parts": [{"text": f"{SYSTEM_PROMPT}\n\nUser: {user_text}"}]}],
-                "generationConfig": {"temperature": 0.8, "maxOutputTokens": 220},
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"temperature": 0.95, "maxOutputTokens": 260},
             },
             timeout=30,
         )
@@ -233,14 +298,34 @@ def _call_gemini(user_text: str) -> Optional[str]:
         return None
 
 
-async def generate_chat_reply(user_text: str) -> str:
-    reply = await asyncio.to_thread(_call_openrouter, user_text)
+def _clean_reply(text: str) -> str:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return ""
+    return cleaned[:1400]
+
+
+async def generate_chat_reply(user_text: str, memory_key: str, is_private: bool) -> str:
+    history = _get_history(memory_key)
+
+    reply = await asyncio.to_thread(_call_openrouter, user_text, history, is_private)
     if reply:
-        return reply
-    reply = await asyncio.to_thread(_call_gemini, user_text)
+        final = _clean_reply(reply)
+        _remember_turn(memory_key, "user", user_text)
+        _remember_turn(memory_key, "assistant", final)
+        return final
+
+    reply = await asyncio.to_thread(_call_gemini, user_text, history, is_private)
     if reply:
-        return reply
-    return _fallback_chat_reply(user_text)
+        final = _clean_reply(reply)
+        _remember_turn(memory_key, "user", user_text)
+        _remember_turn(memory_key, "assistant", final)
+        return final
+
+    final = _fallback_chat_reply(user_text, is_private)
+    _remember_turn(memory_key, "user", user_text)
+    _remember_turn(memory_key, "assistant", final)
+    return final
 
 
 def build_mafia_lobby_keyboard() -> InlineKeyboardMarkup:
@@ -537,6 +622,31 @@ async def settings_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
+async def contact_promo_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    contact_handle, promo_handle = _resolve_contact_promo()
+    contact_url = _telegram_url(contact_handle)
+    promo_url = _telegram_url(promo_handle)
+
+    text_lines = ["CONTACT / PROMOTION\n"]
+    keyboard = []
+
+    if contact_url:
+        text_lines.append(f"Contact: {contact_handle}")
+        keyboard.append([InlineKeyboardButton("Contact", url=contact_url)])
+    if promo_url and promo_url != contact_url:
+        text_lines.append(f"Promotion: {promo_handle}")
+        keyboard.append([InlineKeyboardButton("Promotion", url=promo_url)])
+
+    if not keyboard:
+        text_lines.append("Contact/Promotion IDs not configured yet.")
+
+    keyboard.append([InlineKeyboardButton("Back", callback_data="back_start")])
+    await update.callback_query.edit_message_text(
+        "\n".join(text_lines),
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
 async def chat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("Chat mode active. Message bhejo, main reply karungi.")
 
@@ -546,8 +656,10 @@ async def ask_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Use: /ask <question>")
         return
     prompt = " ".join(context.args).strip()
+    memory_key = _chat_memory_key(update)
+    is_private = update.effective_chat.type == ChatType.PRIVATE
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-    reply = await generate_chat_reply(prompt)
+    reply = await generate_chat_reply(prompt, memory_key, is_private)
     await update.message.reply_text(reply)
 
 
@@ -582,8 +694,10 @@ async def text_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not text:
         text = "Hi"
 
+    memory_key = _chat_memory_key(update)
+    is_private = update.effective_chat.type == ChatType.PRIVATE
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-    reply = await generate_chat_reply(text)
+    reply = await generate_chat_reply(text, memory_key, is_private)
     await msg.reply_text(reply)
 
 
@@ -714,6 +828,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     if data == "chatguide":
         await chatguide_panel(update, context)
+        return
+    if data == "contact_promo":
+        await contact_promo_panel(update, context)
         return
     if data == "settings":
         await q.answer("Settings is temporarily hidden.", show_alert=True)

@@ -1,29 +1,11 @@
-import json
-from pathlib import Path
-
-FILE = Path(__file__).resolve().parent.parent / "data" / "user_coins.json"
-
-
-def load() -> dict:
-    FILE.parent.mkdir(parents=True, exist_ok=True)
-    if not FILE.exists():
-        return {}
-    with FILE.open("r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def save(data: dict) -> None:
-    FILE.parent.mkdir(parents=True, exist_ok=True)
-    with FILE.open("w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+from game.database import add_coins, get_coins, register_user
 
 
 def add(user_id: int, amount: int) -> None:
-    data = load()
-    uid = str(user_id)
-    data[uid] = data.get(uid, 0) + amount
-    save(data)
+    register_user(user_id)
+    add_coins(user_id, amount)
 
 
 def balance(user_id: int) -> int:
-    return load().get(str(user_id), 0)
+    register_user(user_id)
+    return get_coins(user_id)

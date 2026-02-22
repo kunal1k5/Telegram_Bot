@@ -1,47 +1,18 @@
-import json
-from pathlib import Path
-
-FILE = Path(__file__).resolve().parent.parent / "data" / "user_inventory.json"
-
-
-def load() -> dict:
-    FILE.parent.mkdir(parents=True, exist_ok=True)
-    if not FILE.exists():
-        return {}
-    with FILE.open("r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def save(data: dict) -> None:
-    FILE.parent.mkdir(parents=True, exist_ok=True)
-    with FILE.open("w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+from game.database import add_item as db_add_item
+from game.database import get_inventory as db_get_inventory
+from game.database import register_user, use_item as db_use_item
 
 
 def add_item(user_id: int, item: str) -> None:
-    data = load()
-    uid = str(user_id)
-    if uid not in data:
-        data[uid] = {}
-    data[uid][item] = data[uid].get(item, 0) + 1
-    save(data)
+    register_user(user_id)
+    db_add_item(user_id, item, 1)
 
 
 def get_inventory(user_id: int) -> dict:
-    return load().get(str(user_id), {})
+    register_user(user_id)
+    return db_get_inventory(user_id)
 
 
 def use_item(user_id: int, item: str) -> bool:
-    data = load()
-    uid = str(user_id)
-    if uid not in data:
-        return False
-    if data[uid].get(item, 0) <= 0:
-        return False
-    data[uid][item] -= 1
-    if data[uid][item] <= 0:
-        del data[uid][item]
-    if not data[uid]:
-        del data[uid]
-    save(data)
-    return True
+    register_user(user_id)
+    return db_use_item(user_id, item)
