@@ -1,16 +1,26 @@
 import asyncio
+from datetime import datetime
 import os
+import requests
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
+
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.constants import ChatMemberStatus, ChatType
+from telegram.constants import ChatAction, ChatMemberStatus, ChatType
 from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
+    MessageHandler,
+    filters,
 )
 
 from game.economy import balance
@@ -38,44 +48,199 @@ except Exception:
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 BOT_USERNAME = os.getenv("BOT_USERNAME", "YOUR_BOT_USERNAME").strip("@")
-CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "YOUR_CHANNEL").strip("@")
-CONTACT_USERNAME = os.getenv("CONTACT_USERNAME", "YOUR_CONTACT").strip("@")
+CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "@AnimxClan_Channel").strip()
+CONTACT_USERNAME = (os.getenv("CONTACT_USERNAME") or os.getenv("CONTACT_ID") or "").strip()
+PROMOTION_USERNAME = (os.getenv("PROMOTION_USERNAME") or os.getenv("PROMOTION_ID") or "").strip()
+CONTACT_PROMOTION_IDS = (os.getenv("CONTACT_PROMOTION_IDS") or os.getenv("CONTACT_AND_PROMOTION") or "").strip()
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini").strip()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GREETING_TIMEZONE = os.getenv("GREETING_TIMEZONE", "").strip()
 START_PANEL_PHOTO_FILE_ID = os.getenv("START_PANEL_PHOTO_FILE_ID", "").strip()
 START_PANEL_PHOTO_URL = os.getenv("START_PANEL_PHOTO_URL", "").strip()
 START_BANNER_PATH = os.getenv("START_BANNER_PATH", "banner.jpg").strip()
 
 
+def _telegram_url(raw: str) -> Optional[str]:
+    val = (raw or "").strip()
+    if not val:
+        return None
+    upper = val.upper()
+    if upper in {"YOUR_CHANNEL", "YOUR_CONTACT", "YOUR_PROMOTION"}:
+        return None
+    if val.startswith("https://t.me/") or val.startswith("http://t.me/"):
+        return val
+    if val.startswith("@"):
+        return f"https://t.me/{val[1:]}"
+    return f"https://t.me/{val}"
+
+
+def _resolve_contact_promo() -> tuple[str, str]:
+    contact = CONTACT_USERNAME
+    promo = PROMOTION_USERNAME
+    if CONTACT_PROMOTION_IDS:
+        parts = [p.strip() for p in CONTACT_PROMOTION_IDS.split(",") if p.strip()]
+        if parts:
+            contact = parts[0]
+        if len(parts) > 1:
+            promo = parts[1]
+        return contact, promo
+
+    # Backward compatibility: allow two handles inside CONTACT_USERNAME.
+    raw_contact = (CONTACT_USERNAME or "").replace(",", " ").strip()
+    packed = [p for p in raw_contact.split() if p]
+    if len(packed) > 1:
+        contact = packed[0]
+        if not promo:
+            promo = packed[1]
+    return contact, promo
+
+
+def _current_hour() -> int:
+    if GREETING_TIMEZONE and ZoneInfo is not None:
+        try:
+            return datetime.now(ZoneInfo(GREETING_TIMEZONE)).hour
+        except Exception:
+            pass
+    return datetime.now().hour
+
+
+def _dynamic_greeting() -> str:
+    hour = _current_hour()
+    if 5 <= hour < 12:
+        return "Good Morning"
+    if 12 <= hour < 17:
+        return "Good Afternoon"
+    if 17 <= hour < 22:
+        return "Good Evening"
+    return "Good Night"
+
+
 def start_panel_text(user_name: str) -> str:
+    greeting = _dynamic_greeting()
     return (
-        f"✨ HEY BABY {user_name} NICE TO MEET YOU 🌹\n\n"
-        "◎ THIS IS 『ANIMX GAME』\n\n"
-        "➤ A premium designed game + chat bot for Telegram groups & channels.\n\n"
-        "────────────────────────\n"
-        "🎮 Multiplayer Mafia Battles\n"
-        "🚀 Fast • Smart • Always Active\n"
-        "💬 Chat Naturally Like a Friend\n"
-        "────────────────────────\n\n"
-        "🌙 Good Evening 💖"
+        f"HEY BABY {user_name} NICE TO MEET YOU\n\n"
+        "THIS IS ANIMX GAME\n\n"
+        "A premium designed game + chat bot for Telegram groups & channels.\n\n"
+        "------------------------\n"
+        "Multiplayer Mafia Battles\n"
+        "Fast - Smart - Always Active\n"
+        "Chat Naturally Like a Friend\n"
+        "------------------------\n\n"
+        f"{greeting} 💖"
     )
 
 
 def build_start_keyboard(bot_username: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
+    rows = [
+        [InlineKeyboardButton("Chat With Bot", url=f"https://t.me/{bot_username}")],
+        [InlineKeyboardButton("Add Bot To Group", url=f"https://t.me/{bot_username}?startgroup=true")],
         [
-            [InlineKeyboardButton("Chat With Bot", url=f"https://t.me/{bot_username}")],
-            [InlineKeyboardButton("Add Bot To Group", url=f"https://t.me/{bot_username}?startgroup=true")],
-            [
-                InlineKeyboardButton("Help", callback_data="help"),
-                InlineKeyboardButton("Chat Guide", callback_data="chatguide"),
-            ],
-            [
-                InlineKeyboardButton("Channel", url=f"https://t.me/{CHANNEL_USERNAME}"),
-                InlineKeyboardButton("Settings", callback_data="settings"),
-            ],
-            [InlineKeyboardButton("Mafia Game Hub", callback_data="mafia_hub")],
-            [InlineKeyboardButton("Contact / Promotion", url=f"https://t.me/{CONTACT_USERNAME}")],
-        ]
-    )
+            InlineKeyboardButton("Help", callback_data="help"),
+            InlineKeyboardButton("Chat Guide", callback_data="chatguide"),
+        ],
+    ]
+
+    channel_url = _telegram_url(CHANNEL_USERNAME)
+    if channel_url:
+        rows.append([InlineKeyboardButton("Channel", url=channel_url)])
+
+    rows.append([InlineKeyboardButton("Mafia Game Hub", callback_data="mafia_hub")])
+
+    contact_handle, promo_handle = _resolve_contact_promo()
+    contact_url = _telegram_url(contact_handle)
+    promo_url = _telegram_url(promo_handle)
+    contact_row = []
+    if contact_url:
+        contact_row.append(InlineKeyboardButton("Contact", url=contact_url))
+    if promo_url and promo_url != contact_url:
+        contact_row.append(InlineKeyboardButton("Promotion", url=promo_url))
+    if contact_row:
+        rows.append(contact_row)
+
+    return InlineKeyboardMarkup(rows)
+
+
+SYSTEM_PROMPT = (
+    "You are Baby, a warm and playful Hinglish chat companion. "
+    "Reply naturally in short helpful style, like a close friend."
+)
+
+
+def _fallback_chat_reply(user_text: str) -> str:
+    text = (user_text or "").lower().strip()
+    if any(word in text for word in {"hi", "hello", "hey", "gm", "good morning"}):
+        return "Hii baby, main yahin hoon. Aaj kya baat karein? 💖"
+    if any(word in text for word in {"sad", "upset", "depressed", "dukhi"}):
+        return "Main tumhare saath hoon. Bolo kya hua, step by step solve karte hain. 🤍"
+    if any(word in text for word in {"help", "commands", "command"}):
+        return "Main chat, mafia game aur utility commands me help kar sakti hoon. /help try karo."
+    return "Samjha. Isko aur clear karke bolo, main best possible help dungi. ✨"
+
+
+def _call_openrouter(user_text: str) -> Optional[str]:
+    if not OPENROUTER_API_KEY:
+        return None
+    try:
+        response = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": OPENROUTER_MODEL,
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_text},
+                ],
+                "temperature": 0.8,
+                "max_tokens": 220,
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return (data.get("choices", [{}])[0].get("message", {}).get("content") or "").strip() or None
+    except Exception:
+        return None
+
+
+def _call_gemini(user_text: str) -> Optional[str]:
+    if not GEMINI_API_KEY:
+        return None
+    try:
+        response = requests.post(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+            params={"key": GEMINI_API_KEY},
+            headers={"Content-Type": "application/json"},
+            json={
+                "contents": [{"parts": [{"text": f"{SYSTEM_PROMPT}\n\nUser: {user_text}"}]}],
+                "generationConfig": {"temperature": 0.8, "maxOutputTokens": 220},
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        data = response.json()
+        candidates = data.get("candidates", [])
+        if not candidates:
+            return None
+        parts = candidates[0].get("content", {}).get("parts", [])
+        if not parts:
+            return None
+        return (parts[0].get("text") or "").strip() or None
+    except Exception:
+        return None
+
+
+async def generate_chat_reply(user_text: str) -> str:
+    reply = await asyncio.to_thread(_call_openrouter, user_text)
+    if reply:
+        return reply
+    reply = await asyncio.to_thread(_call_gemini, user_text)
+    if reply:
+        return reply
+    return _fallback_chat_reply(user_text)
 
 
 def build_mafia_lobby_keyboard() -> InlineKeyboardMarkup:
@@ -142,7 +307,7 @@ def _wins_rank_text(user_id: int) -> tuple[int, str, str]:
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    bot_username = context.bot.username
+    bot_username = context.bot.username or BOT_USERNAME
     user = update.effective_user.first_name or "Friend"
     text = start_panel_text(user)
     keyboard = build_start_keyboard(bot_username)
@@ -293,40 +458,59 @@ async def mafia_guide(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
-async def help_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text = (
+def _help_text() -> str:
+    return (
         "HELP PANEL\n\n"
-        "Game + Chat Commands:\n"
-        "/start - Open main panel\n"
-        "/help - Open this help panel\n"
+        "Chat Commands:\n"
+        "/chat - Start chat mode\n"
+        "/ask <question> - Ask anything\n"
+        "/help - Open this panel\n\n"
+        "Mafia Commands:\n"
         "/mafia [seconds] - Create mafia lobby in group\n"
         "/join - Join active mafia lobby\n"
-        "/myrole - Show your current role\n"
-        "/buy <item> - Buy lifeline item\n"
-        "/leaderboard - Show top players\n"
-        "/buildinfo - Show deployed commit\n\n"
-        "Admin only (group):\n"
+        "/myrole - Show your role\n"
+        "/buy <item> - Buy item\n"
+        "/leaderboard - Show top players\n\n"
+        "Group Admin:\n"
         "/extend - Extend join timer\n"
-        "/forcestart - Force start game"
+        "/forcestart - Force start game\n\n"
+        "Utility:\n"
+        "/start - Open main panel\n"
+        "/buildinfo - Show deployed commit\n\n"
+        "Chat works in private chat directly.\n"
+        "In groups, mention bot, reply to bot, or use 'baby'."
     )
+
+
+async def help_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = _help_text()
     keyboard = [
         [InlineKeyboardButton("Open Game Hub", callback_data="mafia_hub")],
         [InlineKeyboardButton("Chat Guide", callback_data="chatguide")],
-        [InlineKeyboardButton("Settings", callback_data="settings")],
         [InlineKeyboardButton("Back", callback_data="back_start")],
     ]
     await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    keyboard = [
+        [InlineKeyboardButton("Open Game Hub", callback_data="mafia_hub")],
+        [InlineKeyboardButton("Chat Guide", callback_data="chatguide")],
+    ]
+    await update.message.reply_text(_help_text(), reply_markup=InlineKeyboardMarkup(keyboard))
+
+
 async def chatguide_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (
         "CHAT GUIDE\n\n"
-        "This bot is designed for game + chat workflow.\n\n"
-        "Quick flow:\n"
-        "- /start -> Main panel\n"
-        "- Open Mafia Game Hub\n"
-        "- Start / join mafia match\n"
-        "- Track progress in /leaderboard"
+        "Private Chat:\n"
+        "- Just send a normal message.\n"
+        "- Use /ask <question> for direct Q/A.\n\n"
+        "Group Chat:\n"
+        "- Mention bot username\n"
+        "- Reply to bot message\n"
+        "- Or include keyword: baby\n\n"
+        "Quick commands: /chat, /ask, /help"
     )
     keyboard = [
         [InlineKeyboardButton("Help", callback_data="help")],
@@ -351,6 +535,56 @@ async def settings_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         [InlineKeyboardButton("Back", callback_data="back_start")],
     ]
     await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def chat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text("Chat mode active. Message bhejo, main reply karungi.")
+
+
+async def ask_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not context.args:
+        await update.message.reply_text("Use: /ask <question>")
+        return
+    prompt = " ".join(context.args).strip()
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    reply = await generate_chat_reply(prompt)
+    await update.message.reply_text(reply)
+
+
+def _should_reply_in_group(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
+    lowered = text.lower()
+    bot_username = (context.bot.username or BOT_USERNAME).lower()
+    mention_hit = bot_username and f"@{bot_username}" in lowered
+    keyword_hit = "baby" in lowered
+    reply_hit = (
+        update.effective_message.reply_to_message is not None
+        and update.effective_message.reply_to_message.from_user is not None
+        and update.effective_message.reply_to_message.from_user.id == context.bot.id
+    )
+    return mention_hit or keyword_hit or reply_hit
+
+
+async def text_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.effective_message
+    if not msg or not msg.text:
+        return
+
+    text = msg.text.strip()
+    if not text:
+        return
+
+    if update.effective_chat.type != ChatType.PRIVATE and not _should_reply_in_group(update, context, text):
+        return
+
+    bot_username = (context.bot.username or BOT_USERNAME).lower()
+    if bot_username:
+        text = text.replace(f"@{bot_username}", "").strip()
+    if not text:
+        text = "Hi"
+
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    reply = await generate_chat_reply(text)
+    await msg.reply_text(reply)
 
 
 async def mafia_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -452,7 +686,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     if data == "back_start":
         first_name = q.from_user.first_name or "Friend"
-        await q.edit_message_text(start_panel_text(first_name), reply_markup=build_start_keyboard(context.bot.username))
+        await q.edit_message_text(
+            start_panel_text(first_name),
+            reply_markup=build_start_keyboard(context.bot.username or BOT_USERNAME),
+        )
         return
     if data == "mafia_hub":
         await mafia_hub(update, context)
@@ -479,7 +716,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await chatguide_panel(update, context)
         return
     if data == "settings":
-        await settings_panel(update, context)
+        await q.answer("Settings is temporarily hidden.", show_alert=True)
         return
 
     if data == "mafia_leaderboard":
@@ -610,6 +847,9 @@ def main() -> None:
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("chat", chat_cmd))
+    app.add_handler(CommandHandler("ask", ask_cmd))
     app.add_handler(CommandHandler("mafia", mafia_cmd))
     app.add_handler(CommandHandler("join", join_cmd))
     app.add_handler(CommandHandler("extend", extend_cmd))
@@ -618,6 +858,7 @@ def main() -> None:
     app.add_handler(CommandHandler("myrole", myrole_cmd))
     app.add_handler(CommandHandler("leaderboard", leaderboard_cmd))
     app.add_handler(CommandHandler("buildinfo", buildinfo_cmd))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_chat_handler))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.run_polling()
 
